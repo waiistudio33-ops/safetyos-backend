@@ -1,0 +1,182 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"   // 👈 [แก้ตรงนี้ครับ] ใส่แค่คำว่า postgresql พอครับ
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// 🧑‍💼 CORE: ระบบผู้ใช้งาน
+// ==========================================
+model User {
+  id               String   @id @default(uuid())
+  full_name        String
+  department       String
+  role             String   // 'CONTRACTOR', 'AREA_OWNER', 'SAFETY_ENGINEER'
+  status           String   @default("ACTIVE") // ACTIVE, SUSPENDED (โดนแบน), PENDING_TRAINING
+  profile_url      String?  // รูปโปรไฟล์สำหรับทำบัตร Digital ID (E-Passport)
+  created_at       DateTime @default(now())
+  username         String?  @unique  // 👈 เพิ่มบรรทัดนี้
+  password         String?           // 👈 เพิ่มบรรทัดนี้
+  bbs_observations BbsObservation[]
+  // ความสัมพันธ์กับตารางอื่นๆ
+  permits          Permit[]
+  approvals        ApprovalLog[]
+  certificates     Certificate[]      // ใบประกอบวิชาชีพต่างๆ
+  training_records TrainingRecord[]   // ประวัติการสอบ/อบรม
+  incident_reports IncidentReport[]   // ประวัติการแจ้งจุดเสี่ยง
+  equipment_logs   EquipmentInspectionLog[] // 🚀 [เพิ่มให้] เชื่อมประวัติการตรวจอุปกรณ์
+}
+
+// ==========================================
+// 🎓 MODULE 1: ระบบอบรม & ใบ Cert. (Onboarding)
+// ==========================================
+model Certificate {
+  id          String   @id @default(uuid())
+  user_id     String
+  cert_name   String   // เช่น "ผู้ปฏิบัติงานในที่อับอากาศ", "ช่างไฟฟ้า"
+  file_url    String   // ลิงก์ไฟล์ PDF/รูป จาก Supabase
+  issued_date DateTime // วันที่ออกบัตร
+  expiry_date DateTime // วันหมดอายุ
+  status      String   @default("PENDING") // PENDING (รอ จป. ตรวจ), APPROVED, EXPIRED
+  created_at  DateTime @default(now())
+
+  user        User     @relation(fields: [user_id], references: [id])
+}
+
+model Course {
+  id            String   @id @default(uuid())
+  title         String   // เช่น "ปฐมนิเทศความปลอดภัย MTT 2026"
+  description   String?
+  video_url     String?  // ลิงก์วิดีโอสอน
+  passing_score Int      @default(80) // เกณฑ์ผ่าน (เปอร์เซ็นต์)
+  records       TrainingRecord[]
+}
+
+model TrainingRecord {
+  id           String   @id @default(uuid())
+  user_id      String
+  course_id    String
+  score        Int      // คะแนนที่สอบได้
+  passed       Boolean  // สอบผ่านหรือไม่
+  completed_at DateTime @default(now())
+
+  user         User     @relation(fields: [user_id], references: [id])
+  course       Course   @relation(fields: [course_id], references: [id])
+}
+
+// ==========================================
+// ⚠️ MODULE 2: ระบบแจ้งจุดเสี่ยง & ตรวจอุปกรณ์ (Mobile Ops)
+// ==========================================
+model IncidentReport {
+  id          String   @id @default(uuid())
+  reporter_id String
+  title       String   // เช่น "พบสารเคมีรั่วไหล", "นั่งร้านชำรุด"
+  description String
+  type        String   // NEAR_MISS, ENVIRONMENT, UNSAFE_ACT, UNSAFE_CONDITION
+  lat         Float?   // พิกัด ละติจูด (GPS จากมือถือ)
+  lng         Float?   // พิกัด ลองจิจูด
+  image_url   String?  // รูปถ่ายหน้างาน
+  status      String   @default("OPEN") // OPEN, IN_PROGRESS, RESOLVED (ปิดเคสแล้ว)
+  created_at  DateTime @default(now())
+
+  reporter    User     @relation(fields: [reporter_id], references: [id])
+}
+
+model Equipment {
+  id          String   @id @default(uuid())
+  qr_code     String   @unique // รหัสติดที่อุปกรณ์ (เช่น QR Code ถังดับเพลิง)
+  name        String   // เช่น "ถังดับเพลิง โซน A", "นั่งร้าน PTW-1234"
+  type        String   // FIRE_EXTINGUISHER, SCAFFOLDING, HEAVY_MACHINERY
+  status      String   @default("NORMAL") // NORMAL, DEFECTIVE (ชำรุด)
+  logs        EquipmentInspectionLog[]
+}
+
+// 🚀 [แก้ไขให้] แยกตารางประวัติการตรวจอุปกรณ์ออกมาเป็นตารางของตัวเอง ไม่ซ้อนทับใคร
+model EquipmentInspectionLog {
+  id           String   @id @default(uuid())
+  equipment_id String
+  inspector_id String
+  status       String   // 'NORMAL' หรือ 'DEFECTIVE'
+  details      String   // เก็บผล Checklist เป็นข้อๆ (JSON String)
+  created_at   DateTime @default(now())
+
+  equipment    Equipment @relation(fields: [equipment_id], references: [id])
+  inspector    User      @relation(fields: [inspector_id], references: [id])
+}
+
+// ==========================================
+// 📝 MODULE 3: ระบบ E-Permit (ของเดิมที่ทำไว้)
+// ==========================================
+model Permit {
+  id                String   @id @default(uuid())
+  permit_number     String   @unique 
+  title             String
+  description       String?
+  permit_type       String   
+  status            String   @default("PENDING_AREA_OWNER") 
+  location_detail   String
+  start_time        DateTime
+  end_time          DateTime
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+  confined_entries  ConfinedSpaceEntry[]
+  applicant_id      String
+  applicant         User     @relation(fields: [applicant_id], references: [id])
+  approval_logs     ApprovalLog[]
+  attachments       PermitAttachment[]
+}
+
+model ApprovalLog {
+  id          String   @id @default(uuid())
+  permit_id   String
+  approver_id String
+  action      String   
+  comment     String?
+  created_at  DateTime @default(now())
+
+  permit      Permit   @relation(fields: [permit_id], references: [id])
+  approver    User     @relation(fields: [approver_id], references: [id])
+}
+
+model PermitAttachment {
+  id           String   @id @default(uuid())
+  permit_id    String
+  file_name    String
+  file_type    String   
+  storage_path String   
+  public_url   String
+  uploaded_at  DateTime @default(now())
+
+  permit       Permit   @relation(fields: [permit_id], references: [id])
+}
+// ==========================================
+// 🚀 MODULE: BBS Observation (สังเกตการณ์พฤติกรรมความปลอดภัย)
+// ==========================================
+model BbsObservation {
+  id            String   @id @default(uuid())
+  observer_id   String
+  observer      User     @relation(fields: [observer_id], references: [id])
+  location      String
+  behavior_type String   // 'SAFE' (ปลอดภัย), 'UNSAFE' (เสี่ยง)
+  category      String   // เช่น 'PPE', 'TOOLS', 'POSTURE' (ท่าทาง), 'HOUSEKEEPING'
+  description   String
+  action_taken  String   // เช่น 'VERBAL_WARNING' (ตักเตือน), 'STOP_WORK' (สั่งหยุดงาน)
+  created_at    DateTime @default(now())
+}
+
+// ==========================================
+// 🚀 MODULE: Confined Space Board (บอร์ดควบคุมที่อับอากาศ)
+// ==========================================
+model ConfinedSpaceEntry {
+  id            String   @id @default(uuid())
+  permit_id     String
+  permit        Permit   @relation(fields: [permit_id], references: [id])
+  worker_name   String
+  role          String   // 'ENTRANT' (ผู้ปฏิบัติงาน), 'STANDBY' (ผู้เฝ้าระวัง)
+  time_in       DateTime @default(now())
+  time_out      DateTime?
+  status        String   @default("INSIDE") // 'INSIDE' (อยู่ในบ่อ), 'OUTSIDE' (ขึ้นมาแล้ว)
+}
