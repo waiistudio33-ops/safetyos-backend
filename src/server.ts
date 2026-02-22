@@ -17,8 +17,8 @@ fastify.register(cors, {
 const LINE_CHANNEL_ACCESS_TOKEN = 'U3K/SAEvJQtAL7/RGLYkMtV+pGM1oot704XAi7/EsshKI3LSXwGL+ypOuv6jfxP698amxtXn1hW2ZWzejlH+2rUAYjCm1u5jO7UvnYVc0Oll27JNBOLuI59GBY0fh1jrkraf3ZmOhFEYWUx1JygLEwdB04t89/1O/w1cDnyilFU='; 
 const LINE_TARGET_ID = 'Ua3742ef5e75e2896265de81da0318262'; 
 
-// 🔗 ตั้งค่า URL ของแอปเรา (ใช้ localhost ตอนเทส พอเอาขึ้นคลาวด์ค่อยเปลี่ยนครับ)
-const WEB_APP_URL = 'http://localhost:5173'; 
+// 🔗 [แก้ไข] ตั้งค่า URL ของแอปหน้าบ้านให้ยืดหยุ่น (เวลาเอาหน้าบ้านขึ้น Vercel จะได้ไม่ต้องมาแก้โค้ดตรงนี้อีก)
+const WEB_APP_URL = process.env.FRONTEND_URL || 'http://localhost:5173'; 
 
 // 🛠️ อัปเกรดฟังก์ชันให้รับ URL ของไฟล์แนบได้ด้วย
 const sendLineMessage = async (textMessage: string, attachmentUrl: string | null = null) => {
@@ -541,10 +541,15 @@ fastify.get('/dashboard', async (request, reply) => {
   }
 });
 
+// 🚀 [แก้ไข] สั่งรันแอปให้รองรับ Cloud Deployment (Render.com)
 const start = async () => {
   try {
-    await fastify.listen({ port: 3000 });
-    console.log('🚀 Enterprise Safety Backend is running on http://localhost:3000');
+    // ดึงค่าพอร์ตที่ Render จัดสรรให้ (ถ้าไม่มีให้ใช้ 3000) และบังคับรันบน host 0.0.0.0
+    const PORT = Number(process.env.PORT) || 3000;
+    const HOST = '0.0.0.0';
+
+    await fastify.listen({ port: PORT, host: HOST });
+    console.log(`🚀 Enterprise Safety Backend is running at http://${HOST}:${PORT}`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
