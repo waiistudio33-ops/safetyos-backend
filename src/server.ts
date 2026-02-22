@@ -542,11 +542,12 @@ fastify.get('/dashboard', async (request, reply) => {
 });
 
 // 🚀 [แก้ไข] สั่งรันแอปให้รองรับ Cloud Deployment (Render.com)
+// 🚀 [แก้ไขส่วนนี้] เพื่อให้รองรับพอร์ตของ Render (0.0.0.0)
 const start = async () => {
   try {
-    // ดึงค่าพอร์ตที่ Render จัดสรรให้ (ถ้าไม่มีให้ใช้ 3000) และบังคับรันบน host 0.0.0.0
+    // Render จะส่งพอร์ตมาให้ผ่าน process.env.PORT ถ้าไม่มีค่อยใช้ 3000
     const PORT = Number(process.env.PORT) || 3000;
-    const HOST = '0.0.0.0';
+    const HOST = '0.0.0.0'; // 👈 ต้องเป็น 0.0.0.0 เท่านั้นเพื่อให้ Render เจอแอปเรา
 
     await fastify.listen({ port: PORT, host: HOST });
     console.log(`🚀 Enterprise Safety Backend is running at http://${HOST}:${PORT}`);
