@@ -1,9 +1,14 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client'
+
+const globalForPrisma = global as unknown as { prisma: PrismaClient }
+
+export const prisma = globalForPrisma.prisma || new PrismaClient()
+
+if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 
 const fastify = Fastify({ logger: true });
-const prisma = new PrismaClient();
 
 // ปลดล็อก CORS
 fastify.register(cors, { 
@@ -331,9 +336,28 @@ fastify.post('/incidents', async (request, reply) => {
       }
     });
 
-    // 🔔 ยิง LINE แจ้งเตือนเรื่องจุดเสี่ยง (พร้อมส่งรูปภาพ และลิงก์เข้าแอป)
+    // 🔔 ยิง LINE แจ้งเตือนเรื่องจุดเสี่ยง แบบปรับ UI ใหม่
     const reporter = await prisma.user.findUnique({ where: { id: body.reporter_id } });
-    const msg = `🚨 มีการแจ้งจุดเสี่ยงใหม่!\nหัวข้อ: ${body.title}\nประเภท: ${body.type}\nผู้แจ้ง: ${reporter?.full_name}\n\n🌐 เข้าสู่ระบบเพื่อตรวจสอบ:\n${WEB_APP_URL}`;
+    
+    // แปลง Type ให้สวยงาม
+    const incidentTypeTH = 
+      body.type === 'NEAR_MISS' ? '⚠️ Near Miss (เกือบเกิดอุบัติเหตุ)' : 
+      body.type === 'UNSAFE_ACT' ? '🚫 Unsafe Act (การกระทำที่ไม่ปลอดภัย)' : 
+      '🏭 Unsafe Condition (สภาพแวดล้อมอันตราย)';
+
+    const msg = `🚨 แจ้งเตือนจุดเสี่ยงใหม่ (SafetyOS) 🚨
+--------------------------------------
+📌 หัวข้อ: ${body.title}
+🏷️ ประเภท: ${incidentTypeTH}
+👷 ผู้แจ้ง: ${reporter?.full_name || 'ไม่ระบุชื่อ'}
+📝 รายละเอียด: 
+${body.description}
+
+📍 พิกัด GPS: ${body.lat && body.lng ? `${body.lat}, ${body.lng}` : 'ไม่ระบุ'}
+🔗 แผนที่: ${body.lat && body.lng ? `http://maps.google.com/?q=$${body.lat},${body.lng}` : '-'}
+--------------------------------------
+กรุณาตรวจสอบและดำเนินการแก้ไขด่วน! 🛠️
+🌐 เข้าสู่ระบบ: ${WEB_APP_URL}`;
     
     // ส่งทั้งข้อความ และแนบ URL รูปภาพเข้าไปใน LINE
     await sendLineMessage(msg, body.image_url);
@@ -387,7 +411,7 @@ fastify.get('/permits', async (request, reply) => {
 fastify.post('/permits', async (request, reply) => {
   const body = request.body as any;
   try {
-    const validTypes = ['COLD_WORK', 'HOT_WORK', 'CONFINED_SPACE', 'WORKING_AT_HEIGHT', 'EXCAVATION'];
+    const validTypes = ['COLD_WORK', 'HOT_WORK', 'CONFINED_SPACE', 'WORKING_AT_HEIGHT', 'EXCAVATION', 'ELECTRICAL'];
     const finalType = validTypes.includes(body.permit_type) ? body.permit_type : 'COLD_WORK';
 
     const newPermit = await prisma.permit.create({
@@ -408,10 +432,31 @@ fastify.post('/permits', async (request, reply) => {
       fileUrl = attachment.public_url;
     }
 
-    // 🔔 ยิง LINE แจ้งเตือนขอ Permit ใหม่ (พร้อมแนบลิงก์เข้าแอป)
+    // 🔔 ยิง LINE แจ้งเตือนขอ Permit ใหม่ แบบปรับ UI ใหม่
     const applicant = await prisma.user.findUnique({ where: { id: body.applicant_id } });
-    const typeTH = finalType === 'HOT_WORK' ? 'งานประกายไฟ' : finalType === 'CONFINED_SPACE' ? 'ที่อับอากาศ' : finalType === 'WORKING_AT_HEIGHT' ? 'ทำงานบนที่สูง' : finalType === 'EXCAVATION' ? 'งานขุดเจาะ' : 'งานทั่วไป';
-    const msg = `📝 ขออนุญาตทำงาน (Permit)\nเลขที่: ${newPermit.permit_number}\nหัวข้อ: ${body.title}\nประเภท: ${typeTH}\nพื้นที่: ${body.location_detail || 'ไม่ระบุพื้นที่'}\nผู้ขออนุญาต: ${applicant?.full_name}\n\n🌐 คลิกเพื่อดูรายละเอียดและอนุมัติ:\n${WEB_APP_URL}`;
+    
+    // แปลงประเภทงานให้สวยงาม
+    const permitTypeTH = 
+      finalType === 'HOT_WORK' ? '🔥 งานร้อน (Hot Work)' : 
+      finalType === 'CONFINED_SPACE' ? '🕳️ งานในที่อับอากาศ (Confined Space)' : 
+      finalType === 'WORKING_AT_HEIGHT' ? '🧗 ทำงานบนที่สูง (Working at Height)' : 
+      finalType === 'EXCAVATION' ? '🚜 งานขุดเจาะ (Excavation)' : 
+      finalType === 'ELECTRICAL' ? '⚡ งานระบบไฟฟ้า (Electrical)' : 
+      '❄️ งานทั่วไป (Cold Work)';
+
+    const msg = `📋 คำขอ Work Permit ใหม่ (SafetyOS) 📋
+--------------------------------------
+📌 งาน: ${body.title}
+🏷️ ประเภท: ${permitTypeTH}
+📍 พื้นที่: ${body.location_detail || 'ไม่ระบุพื้นที่'}
+👷 จำนวนช่าง: ${body.workers || '-'} คน
+👤 ผู้ขออนุญาต: ${applicant?.full_name || 'ไม่ระบุชื่อ'}
+
+📝 มาตรการ/รายละเอียด:
+${body.description || 'ไม่มีข้อมูลเพิ่มเติม'}
+--------------------------------------
+👉 จป. / Area Owner โปรดเข้าสู่ระบบเพื่อตรวจสอบ
+🌐 เข้าสู่ระบบ: ${WEB_APP_URL}`;
     
     // ส่งข้อความ พร้อมแนบ URL เอกสาร
     await sendLineMessage(msg, fileUrl);
