@@ -23,7 +23,7 @@ const LINE_CHANNEL_ACCESS_TOKEN = 'U3K/SAEvJQtAL7/RGLYkMtV+pGM1oot704XAi7/EsshKI
 const LINE_TARGET_ID = 'Ua3742ef5e75e2896265de81da0318262'; 
 
 // 🔗 [แก้ไข] ตั้งค่า URL ของแอปหน้าบ้านให้ยืดหยุ่น (เวลาเอาหน้าบ้านขึ้น Vercel จะได้ไม่ต้องมาแก้โค้ดตรงนี้อีก)
-const WEB_APP_URL = process.env.FRONTEND_URL || 'http://localhost:5173'; 
+const WEB_APP_URL = process.env.FRONTEND_URL || 'https://liff.line.me/2009277207-jNY8QghJ'; 
 
 // 🛠️ อัปเกรดฟังก์ชันให้รับ URL ของไฟล์แนบได้ด้วย
 const sendLineMessage = async (textMessage: string, attachmentUrl: string | null = null) => {
