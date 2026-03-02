@@ -19,7 +19,8 @@ model User {
   profile_url      String?  // รูปโปรไฟล์สำหรับทำบัตร Digital ID (E-Passport)
   created_at       DateTime @default(now())
   username         String?  @unique  // 👈 เพิ่มบรรทัดนี้
-  password         String?           // 👈 เพิ่มบรรทัดนี้
+  password         String?
+  line_id        String?  @unique           // 👈 เพิ่มบรรทัดนี้
   bbs_observations BbsObservation[]
   // ความสัมพันธ์กับตารางอื่นๆ
   permits          Permit[]
