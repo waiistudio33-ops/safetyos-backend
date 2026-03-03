@@ -82,9 +82,6 @@ fastify.get('/', async (request, reply) => {
 });
 
 // 🚀 ========================================================
-// 🔐 ระบบ LOGIN 
-// ========================================================
-// 🚀 ========================================================
 // 🔐 ระบบ LOGIN (อัปเกรดรองรับ LINE SSO)
 // ========================================================
 
@@ -523,33 +520,39 @@ fastify.put('/permits/:id', async (request, reply) => {
 });
 
 // ========================================================
-// 🔍 MODULE 4: ระบบตรวจอุปกรณ์ (Equipment Inspection)
+// 🌟 [แก้ไขใหม่!] MODULE 4: ระบบตรวจอุปกรณ์ (Equipment Inspection)
 // ========================================================
 
 fastify.get('/equipment/:qr', async (request, reply) => {
   const { qr } = request.params as { qr: string };
   
-  const equipment = await prisma.equipment.findUnique({ 
-    where: { qr_code: qr },
-    include: {
-      logs: {
-        orderBy: { created_at: 'desc' },
-        include: { inspector: true } 
+  try {
+    const equipment = await prisma.equipment.findUnique({ 
+      where: { qr_code: qr },
+      include: {
+        logs: {
+          orderBy: { created_at: 'desc' },
+          include: { inspector: true } 
+        }
       }
-    }
-  });
+    });
 
-  if (!equipment) return reply.status(404).send({ error: 'ไม่พบอุปกรณ์รหัสนี้' });
-  
-  const result = {
-    ...equipment,
-    history: equipment.logs.map(log => ({
-      ...log,
-      inspector_name: log.inspector.full_name 
-    }))
-  };
+    if (!equipment) return reply.status(404).send({ error: 'ไม่พบอุปกรณ์รหัสนี้' });
+    
+    const result = {
+      ...equipment,
+      // 🟢 เชื่อมประวัติ (history) ให้หน้าบ้านอ่านได้แบบสวยงาม
+      history: equipment.logs ? equipment.logs.map((log: any) => ({
+        ...log,
+        inspector_name: log.inspector ? log.inspector.full_name : 'ไม่ระบุชื่อ'
+      })) : []
+    };
 
-  return result;
+    return result;
+  } catch (error) {
+    console.error("GET Equipment Error:", error);
+    return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในการดึงข้อมูลอุปกรณ์' });
+  }
 });
 
 fastify.put('/equipment/:id/inspect', async (request, reply) => {
@@ -574,7 +577,7 @@ fastify.put('/equipment/:id/inspect', async (request, reply) => {
 
     return updatedEquipment;
   } catch (error) {
-    console.error(error);
+    console.error("PUT Inspect Error:", error);
     return reply.status(500).send({ error: 'ไม่สามารถอัปเดตสถานะอุปกรณ์ได้' });
   }
 });
@@ -611,8 +614,7 @@ fastify.get('/dashboard', async (request, reply) => {
   }
 });
 
-// 🚀 [แก้ไข] สั่งรันแอปให้รองรับ Cloud Deployment (Render.com)
-// 🚀 [แก้ไขส่วนนี้] เพื่อให้รองรับพอร์ตของ Render (0.0.0.0)
+// 🚀 สั่งรันแอปให้รองรับ Cloud Deployment (Render.com)
 const start = async () => {
   try {
     // Render จะส่งพอร์ตมาให้ผ่าน process.env.PORT ถ้าไม่มีค่อยใช้ 3000
