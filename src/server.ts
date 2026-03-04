@@ -19,7 +19,7 @@ fastify.register(cors, {
 // 🚀 ==========================================
 // 🔔 ตั้งค่า LINE Messaging API (พร้อมระบบส่งไฟล์/รูปภาพ)
 // ==========================================
-const LINE_CHANNEL_ACCESS_TOKEN = 'U3K/SAEvJQtAL7/RGLYkMtV+pGM1oot704XAi7/EsshKI3LSXwGL+ypOuv6jfxP698amxtXn1hW2ZWzejlH+2rUAYjCm1u5jO7UvnYVc0Oll27JNBOLuI59GBY0fh1jrkraf3ZmOhFEYWUx1JygLEwdB04t89/1O/w1cDnyilFU='; 
+const LINE_CHANNEL_ACCESS_TOKEN = 'x9a6p21XJ5EptgMfXJ/AfyF8XvHh1ilsX7xOE7lpuAnJ+cSgFkNb5MLR5lYYqVhj98amxtXn1hW2ZWzejlH+2rUAYjCm1u5jO7UvnYVc0Olll3bJY/U/buSf5ajLKjBTMHen053xMQwMP/myAjIk3wdB04t89/1O/w1cDnyilFU='; 
 const LINE_TARGET_ID = 'Ua3742ef5e75e2896265de81da0318262'; 
 
 // 🔗 [แก้ไข] ตั้งค่า URL ของแอปหน้าบ้านให้ยืดหยุ่น (เวลาเอาหน้าบ้านขึ้น Vercel จะได้ไม่ต้องมาแก้โค้ดตรงนี้อีก)
