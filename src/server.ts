@@ -22,7 +22,7 @@ fastify.register(cors, {
 const LINE_CHANNEL_ACCESS_TOKEN = 'x9a6p21XJ5EptgMfXJ/AfyF8XvHh1ilsX7xOE7lpuAnJ+cSgFkNb5MLR5lYYqVhj98amxtXn1hW2ZWzejlH+2rUAYjCm1u5jO7UvnYVc0Olll3bJY/U/buSf5ajLKjBTMHen053xMQwMP/myAjIk3wdB04t89/1O/w1cDnyilFU='; 
 const LINE_TARGET_ID = 'Ua3742ef5e75e2896265de81da0318262'; 
 
-// 🔗 [แก้ไข] ตั้งค่า URL ของแอปหน้าบ้านให้ยืดหยุ่น (เวลาเอาหน้าบ้านขึ้น Vercel จะได้ไม่ต้องมาแก้โค้ดตรงนี้อีก)
+// 🔗 ตั้งค่า URL ของแอปหน้าบ้านให้ยืดหยุ่น 
 const WEB_APP_URL = process.env.FRONTEND_URL || 'https://liff.line.me/2009277207-jNY8QghJ'; 
 
 // 🛠️ อัปเกรดฟังก์ชันให้รับ URL ของไฟล์แนบได้ด้วย
@@ -82,40 +82,11 @@ fastify.get('/', async (request, reply) => {
 });
 
 // 🚀 ========================================================
-// 🔐 ระบบ LOGIN (อัปเกรดรองรับ LINE SSO)
-// ========================================================
-
-// 🚀 ========================================================
 // 🔐 ระบบ LOGIN (อัปเกรดรองรับ LINE SSO + เก็บรูปภาพโปรไฟล์)
 // ========================================================
 
 // 1. API สำหรับ Auto-Login ด้วย LINE ID 
-fastify.post('/login/line', async (request, reply) => {
-  const { line_id, picture_url } = request.body; // 🟢 รับรูปลงมาด้วย
-  try {
-    if (!line_id) return reply.status(400).send({ error: 'ไม่พบ LINE ID' });
-
-    // ค้นหาพนักงานที่เคยผูก LINE ID นี้ไว้แล้ว
-    let user = await prisma.user.findFirst({ where: { line_id: line_id } });
-    
-    if (!user) return reply.status(401).send({ error: 'ยังไม่ได้ผูกบัญชี LINE' });
-
-    // 🟢 ถ้าล็อกอินด้วย LINE แล้วมีรูปส่งมา (หรือรูปเปลี่ยนไป) ให้อัปเดตลง DB เงียบๆ
-    if (picture_url && user.profile_url !== picture_url) {
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: { profile_url: picture_url }
-      });
-    }
-
-    return { message: 'เข้าสู่ระบบอัตโนมัติสำเร็จ', user };
-  } catch (error) {
-    return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในระบบเซิร์ฟเวอร์' });
-  }
-});
-
-// 1. API สำหรับ Auto-Login ด้วย LINE ID 
-fastify.post('/login/line', async (request, reply) => {
+fastify.post('/login/line', async (request: any, reply) => {
   const { line_id, picture_url } = request.body; // 🟢 รับรูปลงมาด้วย
   try {
     if (!line_id) return reply.status(400).send({ error: 'ไม่พบ LINE ID' });
@@ -140,7 +111,7 @@ fastify.post('/login/line', async (request, reply) => {
 });
 
 // 2. API เข้าสู่ระบบปกติ (พร้อมแอบผูก LINE ID และ รูปภาพ ให้เลยถ้ามี)
-fastify.post('/login', async (request, reply) => {
+fastify.post('/login', async (request: any, reply) => {
   const { username, password, line_id, picture_url } = request.body; // 🟢 รับรูปลงมาด้วย
   try {
     let user = await prisma.user.findFirst({
@@ -473,15 +444,26 @@ fastify.get('/permits', async (request, reply) => {
 fastify.post('/permits', async (request, reply) => {
   const body = request.body as any;
   try {
+    console.log("📥 กำลังสร้าง Permit ด้วยข้อมูล:", body);
+
     const validTypes = ['COLD_WORK', 'HOT_WORK', 'CONFINED_SPACE', 'WORKING_AT_HEIGHT', 'EXCAVATION', 'ELECTRICAL'];
     const finalType = validTypes.includes(body.permit_type) ? body.permit_type : 'COLD_WORK';
+
+    // 🟢 ป้องกันบัค String ยาวเกินฐานข้อมูลรับไหว (ตัดเหลือ 500 ตัวอักษร)
+    const safeDescription = body.description ? String(body.description).substring(0, 500) : '-';
+    const safeTitle = body.title ? String(body.title).substring(0, 190) : 'ไม่มีหัวข้อ';
+    const safeLocation = body.location_detail ? String(body.location_detail).substring(0, 190) : 'ไม่ระบุพื้นที่';
 
     const newPermit = await prisma.permit.create({
       data: {
         permit_number: `PTW-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-        title: body.title, description: body.description || '-', permit_type: finalType, 
-        status: 'PENDING_AREA_OWNER', location_detail: body.location_detail || 'ไม่ระบุพื้นที่',
-        start_time: new Date(body.start_time), end_time: new Date(body.end_time),
+        title: safeTitle, 
+        description: safeDescription, 
+        permit_type: finalType, 
+        status: 'PENDING_AREA_OWNER', 
+        location_detail: safeLocation,
+        start_time: new Date(body.start_time), 
+        end_time: new Date(body.end_time),
         applicant_id: body.applicant_id,
       }
     });
@@ -489,15 +471,20 @@ fastify.post('/permits', async (request, reply) => {
     let fileUrl = null;
     if (body.attachment_url) {
       const attachment = await prisma.permitAttachment.create({
-        data: { permit_id: newPermit.id, file_name: body.attachment_name || 'Attached Document', file_type: 'FILE', storage_path: 'supa-storage', public_url: body.attachment_url }
+        data: { 
+          permit_id: newPermit.id, 
+          file_name: String(body.attachment_name || 'Attached Document').substring(0, 190), 
+          file_type: 'FILE', 
+          storage_path: 'supa-storage', 
+          public_url: body.attachment_url 
+        }
       });
       fileUrl = attachment.public_url;
     }
 
-    // 🔔 ยิง LINE แจ้งเตือนขอ Permit ใหม่ แบบปรับ UI ใหม่
+    // 🔔 ยิง LINE แจ้งเตือนขอ Permit ใหม่
     const applicant = await prisma.user.findUnique({ where: { id: body.applicant_id } });
     
-    // แปลงประเภทงานให้สวยงาม
     const permitTypeTH = 
       finalType === 'HOT_WORK' ? '🔥 งานร้อน (Hot Work)' : 
       finalType === 'CONFINED_SPACE' ? '🕳️ งานในที่อับอากาศ (Confined Space)' : 
@@ -508,24 +495,27 @@ fastify.post('/permits', async (request, reply) => {
 
     const msg = `📋 คำขอ Work Permit ใหม่ (SafetyOS) 📋
 --------------------------------------
-📌 งาน: ${body.title}
+📌 งาน: ${safeTitle}
 🏷️ ประเภท: ${permitTypeTH}
-📍 พื้นที่: ${body.location_detail || 'ไม่ระบุพื้นที่'}
+📍 พื้นที่: ${safeLocation}
 👷 จำนวนช่าง: ${body.workers || '-'} คน
 👤 ผู้ขออนุญาต: ${applicant?.full_name || 'ไม่ระบุชื่อ'}
 
 📝 มาตรการ/รายละเอียด:
-${body.description || 'ไม่มีข้อมูลเพิ่มเติม'}
+${safeDescription}
 --------------------------------------
 👉 จป. / Area Owner โปรดเข้าสู่ระบบเพื่อตรวจสอบ
 🌐 เข้าสู่ระบบ: ${WEB_APP_URL}`;
     
-    // ส่งข้อความ พร้อมแนบ URL เอกสาร
     await sendLineMessage(msg, fileUrl);
 
     return newPermit;
-  } catch (error) {
-    return reply.status(500).send({ error: 'ไม่สามารถสร้าง Permit ได้' });
+  } catch (error: any) {
+    console.error("🚨 ERROR CREATE PERMIT:\n", error);
+    // 🟢 ส่งข้อความ Error จากฐานข้อมูลกลับไปบอกแอปหน้าบ้านแบบตรงๆ
+    return reply.status(500).send({ 
+      error: `เซิร์ฟเวอร์ขัดข้อง: ${error.message}` 
+    });
   }
 });
 
