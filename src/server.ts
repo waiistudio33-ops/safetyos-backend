@@ -85,16 +85,28 @@ fastify.get('/', async (request, reply) => {
 // 🔐 ระบบ LOGIN (อัปเกรดรองรับ LINE SSO)
 // ========================================================
 
+// 🚀 ========================================================
+// 🔐 ระบบ LOGIN (อัปเกรดรองรับ LINE SSO + เก็บรูปภาพโปรไฟล์)
+// ========================================================
+
 // 1. API สำหรับ Auto-Login ด้วย LINE ID 
-fastify.post('/login/line', async (request: any, reply) => {
-  const { line_id } = request.body;
+fastify.post('/login/line', async (request, reply) => {
+  const { line_id, picture_url } = request.body; // 🟢 รับรูปลงมาด้วย
   try {
     if (!line_id) return reply.status(400).send({ error: 'ไม่พบ LINE ID' });
 
     // ค้นหาพนักงานที่เคยผูก LINE ID นี้ไว้แล้ว
-    const user = await prisma.user.findFirst({ where: { line_id: line_id } });
+    let user = await prisma.user.findFirst({ where: { line_id: line_id } });
     
     if (!user) return reply.status(401).send({ error: 'ยังไม่ได้ผูกบัญชี LINE' });
+
+    // 🟢 ถ้าล็อกอินด้วย LINE แล้วมีรูปส่งมา (หรือรูปเปลี่ยนไป) ให้อัปเดตลง DB เงียบๆ
+    if (picture_url && user.profile_url !== picture_url) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { profile_url: picture_url }
+      });
+    }
 
     return { message: 'เข้าสู่ระบบอัตโนมัติสำเร็จ', user };
   } catch (error) {
@@ -102,23 +114,51 @@ fastify.post('/login/line', async (request: any, reply) => {
   }
 });
 
-// 2. API เข้าสู่ระบบปกติ (พร้อมแอบผูก LINE ID ให้เลยถ้ามี)
-fastify.post('/login', async (request: any, reply) => {
-  const { username, password, line_id } = request.body; // 🟢 รับ line_id มาด้วย
+// 1. API สำหรับ Auto-Login ด้วย LINE ID 
+fastify.post('/login/line', async (request, reply) => {
+  const { line_id, picture_url } = request.body; // 🟢 รับรูปลงมาด้วย
   try {
-    const user = await prisma.user.findFirst({
+    if (!line_id) return reply.status(400).send({ error: 'ไม่พบ LINE ID' });
+
+    // ค้นหาพนักงานที่เคยผูก LINE ID นี้ไว้แล้ว
+    let user = await prisma.user.findFirst({ where: { line_id: line_id } });
+    
+    if (!user) return reply.status(401).send({ error: 'ยังไม่ได้ผูกบัญชี LINE' });
+
+    // 🟢 ถ้าล็อกอินด้วย LINE แล้วมีรูปส่งมา (หรือรูปเปลี่ยนไป) ให้อัปเดตลง DB เงียบๆ
+    if (picture_url && user.profile_url !== picture_url) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { profile_url: picture_url }
+      });
+    }
+
+    return { message: 'เข้าสู่ระบบอัตโนมัติสำเร็จ', user };
+  } catch (error) {
+    return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในระบบเซิร์ฟเวอร์' });
+  }
+});
+
+// 2. API เข้าสู่ระบบปกติ (พร้อมแอบผูก LINE ID และ รูปภาพ ให้เลยถ้ามี)
+fastify.post('/login', async (request, reply) => {
+  const { username, password, line_id, picture_url } = request.body; // 🟢 รับรูปลงมาด้วย
+  try {
+    let user = await prisma.user.findFirst({
       where: { username: username, password: password }
     });
 
     if (!user) return reply.status(401).send({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง!' });
 
-    // 🟢 ถ้าล็อกอินสำเร็จ และส่ง line_id มาด้วย ให้ทำการผูกบัญชีทันที!
-    if (line_id && !user.line_id) {
-      await prisma.user.update({
+    // 🟢 ถ้าล็อกอินสำเร็จ และส่ง line_id มาด้วย ให้ทำการผูกบัญชีและอัปเดตรูปทันที!
+    if (line_id) {
+      user = await prisma.user.update({
         where: { id: user.id },
-        data: { line_id: line_id } // บันทึก LINE ID ลง DB
+        data: { 
+          line_id: line_id,
+          profile_url: picture_url || user.profile_url // เซฟรูปด้วยถ้ามีส่งมา
+        } 
       });
-      console.log(`🔗 ผูกบัญชี LINE ให้กับ ${user.full_name} สำเร็จ!`);
+      console.log(`🔗 ผูกบัญชี LINE และอัปเดตรูป ให้กับ ${user.full_name} สำเร็จ!`);
     }
 
     return { message: 'เข้าสู่ระบบสำเร็จ', user };
