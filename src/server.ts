@@ -82,12 +82,12 @@ fastify.get('/', async (request, reply) => {
 });
 
 // 🚀 ========================================================
-// 🔐 ระบบ LOGIN (อัปเกรดรองรับ LINE SSO + เก็บรูปภาพโปรไฟล์)
+// 🔐 ระบบ LOGIN (อัปเกรดรองรับ LINE SSO + เก็บรูปภาพโปรไฟล์แบบเสถียร 100%)
 // ========================================================
 
 // 1. API สำหรับ Auto-Login ด้วย LINE ID 
 fastify.post('/login/line', async (request: any, reply) => {
-  const { line_id, picture_url } = request.body; // 🟢 รับรูปลงมาด้วย
+  const { line_id, picture_url } = request.body;
   try {
     if (!line_id) return reply.status(400).send({ error: 'ไม่พบ LINE ID' });
 
@@ -96,23 +96,26 @@ fastify.post('/login/line', async (request: any, reply) => {
     
     if (!user) return reply.status(401).send({ error: 'ยังไม่ได้ผูกบัญชี LINE' });
 
-    // 🟢 ถ้าล็อกอินด้วย LINE แล้วมีรูปส่งมา (หรือรูปเปลี่ยนไป) ให้อัปเดตลง DB เงียบๆ
+    // 🟢 ถ้าระบบพบว่ามีรูปส่งมา และรูปไม่เหมือนในฐานข้อมูล (เช่น ผู้ใช้เปลี่ยนรูปใน LINE) ให้อัปเดตทันที
     if (picture_url && user.profile_url !== picture_url) {
       user = await prisma.user.update({
         where: { id: user.id },
         data: { profile_url: picture_url }
       });
+      console.log(`🔄 อัปเดตรูปโปรไฟล์ล่าสุดให้: ${user.full_name}`);
     }
 
+    // ส่งข้อมูล user ที่อัปเดตล่าสุดกลับไปให้หน้าบ้าน
     return { message: 'เข้าสู่ระบบอัตโนมัติสำเร็จ', user };
   } catch (error) {
+    console.error("LINE Login Error:", error);
     return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในระบบเซิร์ฟเวอร์' });
   }
 });
 
 // 2. API เข้าสู่ระบบปกติ (พร้อมแอบผูก LINE ID และ รูปภาพ ให้เลยถ้ามี)
 fastify.post('/login', async (request: any, reply) => {
-  const { username, password, line_id, picture_url } = request.body; // 🟢 รับรูปลงมาด้วย
+  const { username, password, line_id, picture_url } = request.body;
   try {
     let user = await prisma.user.findFirst({
       where: { username: username, password: password }
@@ -120,20 +123,26 @@ fastify.post('/login', async (request: any, reply) => {
 
     if (!user) return reply.status(401).send({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง!' });
 
-    // 🟢 ถ้าล็อกอินสำเร็จ และส่ง line_id มาด้วย ให้ทำการผูกบัญชีและอัปเดตรูปทันที!
+    // 🟢 ถ้าล็อกอินสำเร็จ มีส่ง line_id มาด้วย และยังไม่เคยผูก หรือรูปเปลี่ยน ให้ทำการอัปเดต!
     if (line_id) {
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: { 
-          line_id: line_id,
-          profile_url: picture_url || user.profile_url // เซฟรูปด้วยถ้ามีส่งมา
-        } 
-      });
-      console.log(`🔗 ผูกบัญชี LINE และอัปเดตรูป ให้กับ ${user.full_name} สำเร็จ!`);
+      const needUpdateLine = !user.line_id;
+      const needUpdatePic = picture_url && user.profile_url !== picture_url;
+
+      if (needUpdateLine || needUpdatePic) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: { 
+            line_id: line_id, // ผูกบัญชี
+            profile_url: picture_url || user.profile_url // เซฟรูป
+          } 
+        });
+        console.log(`🔗 ผูกบัญชีและอัปเดตข้อมูล LINE ให้กับ ${user.full_name} สำเร็จ!`);
+      }
     }
 
     return { message: 'เข้าสู่ระบบสำเร็จ', user };
   } catch (error) {
+    console.error("Manual Login Error:", error);
     return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในระบบเซิร์ฟเวอร์' });
   }
 });
