@@ -157,16 +157,59 @@ model PermitAttachment {
 // ==========================================
 // 🚀 MODULE: BBS Observation (สังเกตการณ์พฤติกรรมความปลอดภัย)
 // ==========================================
+// 🌟 ตารางเก็บข้อมูล BBS
 model BbsObservation {
-  id            String   @id @default(uuid())
-  observer_id   String
-  observer      User     @relation(fields: [observer_id], references: [id])
-  location      String
-  behavior_type String   // 'SAFE' (ปลอดภัย), 'UNSAFE' (เสี่ยง)
-  category      String   // เช่น 'PPE', 'TOOLS', 'POSTURE' (ท่าทาง), 'HOUSEKEEPING'
-  description   String
-  action_taken  String   // เช่น 'VERBAL_WARNING' (ตักเตือน), 'STOP_WORK' (สั่งหยุดงาน)
-  created_at    DateTime @default(now())
+  id              String         @id @default(uuid())
+  date            DateTime       @default(now())
+  location        String
+  observed_group  ObservedGroup  @default(EMPLOYEE) // 👈 ใหม่: กลุ่มผู้ถูกสังเกต
+  behavior_type   BehaviorType
+  category        BbsCategory
+  action_taken    ActionTaken    // 👈 อัปเดต: การดำเนินการ
+  description     String
+  root_cause      RootCause?     // 👈 ใหม่: สาเหตุรากเหง้า (ใส่ ? เพราะอาจจะไม่มีถ้าเป็น SAFE)
+  suggestion      String?        // 👈 ใหม่: ข้อเสนอแนะ (ใส่ ? เพราะอาจจะไม่มี)
+  photos          String[]       // 👈 ใหม่: เก็บ URL รูปภาพเป็น Array (เผื่ออัปโหลดรูป)
+
+  observer_id     String
+  observer        User           @relation(fields: [observer_id], references: [id])
+
+  created_at      DateTime       @default(now())
+  updated_at      DateTime       @updatedAt
+}
+
+// 🌟 สร้าง Enum ควบคุมข้อมูลให้เป๊ะตรงตาม Form หน้าบ้าน
+enum ObservedGroup {
+  EMPLOYEE
+  CONTRACTOR
+}
+
+enum BehaviorType {
+  SAFE
+  UNSAFE
+}
+
+enum BbsCategory {
+  PPE
+  TOOLS
+  POSTURE
+  HOUSEKEEPING
+  LINE_OF_FIRE
+  PROCEDURE
+}
+
+enum ActionTaken {
+  PRAISED
+  CORRECTED
+  VERBAL_WARNING
+  STOP_WORK
+}
+
+enum RootCause {
+  RUSH
+  UNAWARE
+  EQUIPMENT
+  HABIT
 }
 
 // ==========================================

@@ -229,20 +229,32 @@ fastify.get('/bbs', async (request, reply) => {
 });
 
 fastify.post('/bbs', async (request, reply) => {
-  const body = request.body as any;
-  try {
-    const newBbs = await prisma.bbsObservation.create({ data: body });
-    // แจ้งเตือน LINE ถ้าพบพฤติกรรมเสี่ยงและต้องหยุดงาน
-    if (newBbs.behavior_type === 'UNSAFE' && newBbs.action_taken === 'STOP_WORK') {
-      const observer = await prisma.user.findUnique({ where: { id: newBbs.observer_id } });
-      const msg = `🛑 [BBS Alert] สั่งหยุดงานทันที!\nพื้นที่: ${newBbs.location}\nพฤติกรรมเสี่ยง: ${newBbs.category}\nรายละเอียด: ${newBbs.description}\nผู้ตรวจประเมิน: ${observer?.full_name}\n\n🌐 โปรดตรวจสอบหน้างานด่วน:\n${WEB_APP_URL}`;
-      await sendLineMessage(msg);
-    }
-    return newBbs;
-  } catch (error) {
-    return reply.status(500).send({ error: 'ไม่สามารถบันทึกข้อมูล BBS ได้' });
-  }
-});
+      const { 
+        location, observed_group, behavior_type, category, 
+        action_taken, description, root_cause, suggestion, observer_id, date 
+      } = request.body as any;
+
+      try {
+        const bbs = await prisma.bbsObservation.create({
+          data: {
+            date: date ? new Date(date) : new Date(), // รับเวลาจากหน้าบ้าน
+            location,
+            observed_group,
+            behavior_type,
+            category,
+            action_taken,
+            description,
+            root_cause: root_cause || null, // ถ้าไม่มีให้เป็น null
+            suggestion: suggestion || null, // ถ้าไม่มีให้เป็น null
+            observer_id
+          }
+        });
+        return reply.send(bbs);
+      } catch (error) {
+        console.error("BBS Create Error:", error);
+        return reply.status(500).send({ error: 'ไม่สามารถบันทึกข้อมูล BBS ได้' });
+      }
+    });
 
 // ========================================================
 // 🕳️ MODULE: Confined Space Board 
