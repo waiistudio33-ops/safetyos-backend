@@ -5,6 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ==========================================
@@ -20,7 +21,7 @@ model User {
   created_at       DateTime @default(now())
   username         String?  @unique  // 👈 เพิ่มบรรทัดนี้
   password         String?
-  line_id        String?  @unique           // 👈 เพิ่มบรรทัดนี้
+  line_id          String?  @unique           // 👈 เพิ่มบรรทัดนี้
   bbs_observations BbsObservation[]
   // ความสัมพันธ์กับตารางอื่นๆ
   permits          Permit[]
