@@ -117,6 +117,7 @@ model Permit {
   applicant           User                 @relation(fields: [applicant_id], references: [id])
   attachments         PermitAttachment[]
   gas_logs            gas_logs[]
+  extension_reason    String?
 }
 
 model ApprovalLog {

@@ -637,10 +637,13 @@ fastify.put('/permits/:id/extend', async (request, reply) => {
     const permit = await prisma.permit.findUnique({ where: { id } });
     if (!permit) return reply.status(404).send({ error: 'ไม่พบ Permit' });
 
-    // 1. อัปเดตเวลาสิ้นสุดใหม่ใน Database
+   // 1. อัปเดตเวลาสิ้นสุดใหม่ และเก็บเหตุผลลง Database ด้วย
     const updatedPermit = await prisma.permit.update({
       where: { id },
-      data: { end_time: new Date(new_end_time) }
+      data: { 
+        end_time: new Date(new_end_time),
+        extension_reason: reason  // 🟢 เพิ่มบรรทัดนี้เข้ามาครับ!
+      }
     });
 
     // 2. ยิง LINE แจ้งเตือน จป. และ Area Owner ให้รับทราบ
