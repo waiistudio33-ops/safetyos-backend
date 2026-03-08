@@ -157,6 +157,7 @@ fastify.get('/seed', async (request, reply) => {
     await prisma.bbsObservation.deleteMany();
     await prisma.approvalLog.deleteMany();
     await prisma.permitAttachment.deleteMany();
+    await prisma.gas_logs.deleteMany(); // ล้าง log ก๊าซก่อน
     await prisma.permit.deleteMany();
     await prisma.certificate.deleteMany(); 
     await prisma.trainingRecord.deleteMany(); 
@@ -229,32 +230,32 @@ fastify.get('/bbs', async (request, reply) => {
 });
 
 fastify.post('/bbs', async (request, reply) => {
-      const { 
-        location, observed_group, behavior_type, category, 
-        action_taken, description, root_cause, suggestion, observer_id, date 
-      } = request.body as any;
+  const { 
+    location, observed_group, behavior_type, category, 
+    action_taken, description, root_cause, suggestion, observer_id, date 
+  } = request.body as any;
 
-      try {
-        const bbs = await prisma.bbsObservation.create({
-          data: {
-            date: date ? new Date(date) : new Date(), // รับเวลาจากหน้าบ้าน
-            location,
-            observed_group,
-            behavior_type,
-            category,
-            action_taken,
-            description,
-            root_cause: root_cause || null, // ถ้าไม่มีให้เป็น null
-            suggestion: suggestion || null, // ถ้าไม่มีให้เป็น null
-            observer_id
-          }
-        });
-        return reply.send(bbs);
-      } catch (error) {
-        console.error("BBS Create Error:", error);
-        return reply.status(500).send({ error: 'ไม่สามารถบันทึกข้อมูล BBS ได้' });
+  try {
+    const bbs = await prisma.bbsObservation.create({
+      data: {
+        date: date ? new Date(date) : new Date(), // รับเวลาจากหน้าบ้าน
+        location,
+        observed_group,
+        behavior_type,
+        category,
+        action_taken,
+        description,
+        root_cause: root_cause || null, // ถ้าไม่มีให้เป็น null
+        suggestion: suggestion || null, // ถ้าไม่มีให้เป็น null
+        observer_id
       }
     });
+    return reply.send(bbs);
+  } catch (error) {
+    console.error("BBS Create Error:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถบันทึกข้อมูล BBS ได้' });
+  }
+});
 
 // ========================================================
 // 🕳️ MODULE: Confined Space Board 
@@ -447,12 +448,17 @@ fastify.put('/incidents/:id/status', async (request, reply) => {
 });
 
 // ========================================================
-// 📝 MODULE 3: ระบบ E-Permit (ของเดิม)
+// 📝 MODULE 3: ระบบ E-Permit & Gas Testing
 // ========================================================
 
 fastify.get('/permits', async (request, reply) => {
   const permits = await prisma.permit.findMany({
-    include: { applicant: true, approval_logs: { include: { approver: true } } },
+    // 🟢 ดึงข้อมูล gas_logs มาพร้อมกับ Permit เพื่อให้หน้าบ้านเช็คสถานะปุ่มได้
+    include: { 
+      applicant: true, 
+      approval_logs: { include: { approver: true } },
+      gas_logs: true 
+    },
     orderBy: { created_at: 'desc' }
   });
   const attachments = await prisma.permitAttachment.findMany();
@@ -462,6 +468,7 @@ fastify.get('/permits', async (request, reply) => {
   });
 });
 
+// [POST] สร้าง Permit (แก้ไขให้ครบถ้วน)
 fastify.post('/permits', async (request, reply) => {
   const body = request.body as any;
   try {
@@ -475,6 +482,13 @@ fastify.post('/permits', async (request, reply) => {
     const safeTitle = body.title ? String(body.title).substring(0, 190) : 'ไม่มีหัวข้อ';
     const safeLocation = body.location_detail ? String(body.location_detail).substring(0, 190) : 'ไม่ระบุพื้นที่';
 
+    // 🟢 เตรียมข้อมูลฟิลด์ใหม่ (เฟส 1) ป้องกันข้อมูลเป็น null หรือยาวเกินไป
+    const gasTester = body.gas_tester_name ? String(body.gas_tester_name).substring(0, 190) : null;
+    const standbyPerson = body.standby_person_name ? String(body.standby_person_name).substring(0, 190) : null;
+    const commEquip = body.communication_equip ? String(body.communication_equip).substring(0, 190) : null;
+    const isolationList = body.isolation_checklist ? body.isolation_checklist : null; // ส่งเป็น Array/JSON ได้เลย
+
+    // 🟢 บันทึกลงฐานข้อมูลผ่าน Prisma
     const newPermit = await prisma.permit.create({
       data: {
         permit_number: `PTW-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -486,6 +500,12 @@ fastify.post('/permits', async (request, reply) => {
         start_time: new Date(body.start_time), 
         end_time: new Date(body.end_time),
         applicant_id: body.applicant_id,
+        
+        // ฟิลด์ใหม่ที่ถูกเพิ่มเข้ามาในฐานข้อมูล
+        gas_tester_name: gasTester,
+        standby_person_name: standbyPerson,
+        communication_equip: commEquip,
+        isolation_checklist: isolationList
       }
     });
 
@@ -530,13 +550,52 @@ ${safeDescription}
     
     await sendLineMessage(msg, fileUrl);
 
-    return newPermit;
+    return reply.send(newPermit);
+
   } catch (error: any) {
     console.error("🚨 ERROR CREATE PERMIT:\n", error);
     // 🟢 ส่งข้อความ Error จากฐานข้อมูลกลับไปบอกแอปหน้าบ้านแบบตรงๆ
     return reply.status(500).send({ 
       error: `เซิร์ฟเวอร์ขัดข้อง: ${error.message}` 
     });
+  }
+});
+
+// 🧪 [POST] บันทึกผลตรวจวัดก๊าซและ Safety Talk
+fastify.post('/gas-logs', async (request, reply) => {
+  const body = request.body as any;
+  try {
+    const newLog = await prisma.gas_logs.create({
+      data: {
+        permit_id: body.permit_id,
+        tester_id: body.tester_id,
+        o2_level: body.o2_level,
+        lel_level: body.lel_level,
+        co_level: body.co_level,
+        h2s_level: body.h2s_level,
+        safety_talk_done: body.safety_talk_done
+      }
+    });
+    return reply.send({ message: 'บันทึกข้อมูลก๊าซสำเร็จ', data: newLog });
+  } catch (error: any) {
+    console.error("❌ Error saving gas log:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถบันทึกข้อมูลก๊าซได้', details: error.message });
+  }
+});
+
+// 📊 [GET] ดึงประวัติการตรวจก๊าซของ Permit นั้นๆ เพื่อเอาไปโชว์ในหน้า Detail
+fastify.get('/permits/:id/gas-logs', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  try {
+    const logs = await prisma.gas_logs.findMany({
+      where: { permit_id: id },
+      include: { tester: true }, // ดึงชื่อคนตรวจสอบมาด้วย
+      orderBy: { recorded_at: 'desc' } // เรียงลำดับจากล่าสุด
+    });
+    return reply.send(logs);
+  } catch (error: any) {
+    console.error("❌ Error fetching gas logs:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลก๊าซได้', details: error.message });
   }
 });
 
@@ -569,9 +628,33 @@ fastify.put('/permits/:id', async (request, reply) => {
     return reply.status(500).send({ error: 'ไม่สามารถอัปเดตสถานะได้' });
   }
 });
+// ⏳ [PUT] ขอขยายเวลาทำงาน (Extend Permit)
+fastify.put('/permits/:id/extend', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const { new_end_time, reason, requested_by } = request.body as any;
+  
+  try {
+    const permit = await prisma.permit.findUnique({ where: { id } });
+    if (!permit) return reply.status(404).send({ error: 'ไม่พบ Permit' });
 
+    // 1. อัปเดตเวลาสิ้นสุดใหม่ใน Database
+    const updatedPermit = await prisma.permit.update({
+      where: { id },
+      data: { end_time: new Date(new_end_time) }
+    });
+
+    // 2. ยิง LINE แจ้งเตือน จป. และ Area Owner ให้รับทราบ
+    const msg = `⏳ [แจ้งขอขยายเวลาทำงาน]\nเลขที่: ${permit.permit_number}\nหัวข้อ: ${permit.title}\nผู้ขอ: ${requested_by}\n\n📝 เหตุผล: ${reason}\n⏰ เวลาสิ้นสุดใหม่: ${new Date(new_end_time).toLocaleString('th-TH')}\n\n👉 จป. / Area Owner โปรดรับทราบและตรวจสอบความปลอดภัยหน้างานเพิ่มเติมครับ`;
+    await sendLineMessage(msg);
+
+    return reply.send({ message: 'ขยายเวลาสำเร็จ', permit: updatedPermit });
+  } catch (error) {
+    console.error("Extend Permit Error:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถขยายเวลาได้' });
+  }
+});
 // ========================================================
-// 🌟 [แก้ไขใหม่!] MODULE 4: ระบบตรวจอุปกรณ์ (Equipment Inspection)
+// 🌟 MODULE 4: ระบบตรวจอุปกรณ์ (Equipment Inspection)
 // ========================================================
 
 fastify.get('/equipment/:qr', async (request, reply) => {
