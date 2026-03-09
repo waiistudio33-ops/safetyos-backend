@@ -58,7 +58,6 @@ const createPermitFlex = (title: string, permitNo: string, status: string, locat
     { type: "box", layout: "baseline", spacing: "sm", contents: [{ type: "text", text: "ผู้ขอ:", color: "#aaaaaa", size: "sm", flex: 1 }, { type: "text", text: applicant, wrap: true, color: "#666666", size: "sm", flex: 3 }] }
   ];
 
-  // ถ้ามีหมายเหตุเพิ่มเติม (เช่น โดน Reject หรือ ขอต่อเวลา)
   if (extraNote) {
     detailsContent.push({ type: "box", layout: "baseline", spacing: "sm", margin: "md", contents: [{ type: "text", text: "หมายเหตุ:", color: "#e11d48", size: "sm", flex: 1, weight: "bold" }, { type: "text", text: extraNote, wrap: true, color: "#e11d48", size: "sm", flex: 3 }] });
   }
@@ -80,6 +79,40 @@ const createPermitFlex = (title: string, permitNo: string, status: string, locat
       footer: {
         type: "box", layout: "vertical", spacing: "sm",
         contents: [{ type: "button", style: "primary", height: "sm", color: color, action: { type: "uri", label: "เปิดแอป SafetyOS", uri: actionUrl } }]
+      }
+    }
+  };
+};
+
+// 🟢 2.1 สร้างการ์ด Flex Message สำหรับผลตรวจวัดก๊าซ (สวยงามและอ่านง่าย)
+const createGasTestFlex = (permitNo: string, testerName: string, o2: number, lel: number, co: number, h2s: number, actionUrl: string) => {
+  return {
+    type: "flex",
+    altText: `ผลตรวจวัดสภาพอากาศ: ${permitNo}`,
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box", layout: "vertical", backgroundColor: "#0891b2", // สี Cyan สื่อถึงอากาศ
+        contents: [{ type: "text", text: "Atmospheric Test Report", weight: "bold", color: "#ffffff", size: "xs" }]
+      },
+      body: {
+        type: "box", layout: "vertical",
+        contents: [
+          { type: "text", text: "บันทึกผลตรวจวัดก๊าซหน้างาน", weight: "bold", size: "lg", margin: "md", wrap: true, color: "#1e293b" },
+          { type: "separator", margin: "lg" },
+          { type: "box", layout: "vertical", margin: "lg", spacing: "sm", contents: [
+            { type: "box", layout: "baseline", spacing: "sm", contents: [{ type: "text", text: "เลขที่:", color: "#aaaaaa", size: "sm", flex: 2 }, { type: "text", text: permitNo, color: "#333333", size: "sm", weight: "bold", flex: 5 }] },
+            { type: "box", layout: "baseline", spacing: "sm", contents: [{ type: "text", text: "ผู้ตรวจ:", color: "#aaaaaa", size: "sm", flex: 2 }, { type: "text", text: testerName, color: "#666666", size: "sm", flex: 5 }] },
+            { type: "box", layout: "baseline", spacing: "sm", margin: "md", contents: [{ type: "text", text: "O2:", color: "#aaaaaa", size: "sm", flex: 2 }, { type: "text", text: `${o2} %`, color: o2 >= 19.5 && o2 <= 23.5 ? "#059669" : "#e11d48", weight: "bold", size: "md", flex: 5 }] },
+            { type: "box", layout: "baseline", spacing: "sm", contents: [{ type: "text", text: "LEL:", color: "#aaaaaa", size: "sm", flex: 2 }, { type: "text", text: `${lel} %`, color: lel < 10 ? "#059669" : "#e11d48", weight: "bold", size: "md", flex: 5 }] },
+            { type: "box", layout: "baseline", spacing: "sm", contents: [{ type: "text", text: "CO:", color: "#aaaaaa", size: "sm", flex: 2 }, { type: "text", text: `${co} ppm`, color: co < 25 ? "#059669" : "#e11d48", weight: "bold", size: "md", flex: 5 }] },
+            { type: "box", layout: "baseline", spacing: "sm", contents: [{ type: "text", text: "H2S:", color: "#aaaaaa", size: "sm", flex: 2 }, { type: "text", text: `${h2s} ppm`, color: h2s < 10 ? "#059669" : "#e11d48", weight: "bold", size: "md", flex: 5 }] }
+          ]}
+        ]
+      },
+      footer: {
+        type: "box", layout: "vertical", spacing: "sm",
+        contents: [{ type: "button", style: "primary", height: "sm", color: "#0891b2", action: { type: "uri", label: "ดูรายละเอียดในแอป", uri: actionUrl } }]
       }
     }
   };
@@ -291,7 +324,7 @@ fastify.put('/incidents/:id/status', async (request, reply) => {
 });
 
 // ========================================================
-// 📝 MODULE 3: ระบบ E-Permit & Gas Testing (ผูก Flex Message แล้ว)
+// 📝 MODULE 3: ระบบ E-Permit & Gas Testing (ผูก Flex Message)
 // ========================================================
 
 fastify.get('/permits', async (request, reply) => {
@@ -332,15 +365,12 @@ fastify.post('/permits', async (request, reply) => {
 
     const applicant = await prisma.user.findUnique({ where: { id: body.applicant_id } });
     
-    // 🟢 ดึงข้อมูล Area Owner ทุกคนในระบบเพื่อส่ง Flex Message หา
     const areaOwners = await prisma.user.findMany({ where: { role: 'AREA_OWNER', line_id: { not: null } } });
     const flex = createPermitFlex("มีคำขอ Permit ใหม่เข้าพื้นที่", newPermit.permit_number, "🔶 รอเจ้าของพื้นที่ตรวจสอบ", safeLocation, applicant?.full_name || '-', "#f59e0b", `${WEB_APP_URL}?page=E_PERMIT`);
     
     for (const owner of areaOwners) {
       if (owner.line_id) await sendFlexPush(owner.line_id, flex);
     }
-    
-    // สำรอง: ถ้าไม่มี Area Owner ผูกไลน์เลย ส่งเข้ากลุ่มรวม
     if (areaOwners.length === 0) await sendFlexPush(LINE_TARGET_ID, flex);
 
     return reply.send(newPermit);
@@ -350,12 +380,31 @@ fastify.post('/permits', async (request, reply) => {
   }
 });
 
+// 🌟 [POST] บันทึกผลก๊าซ (แจ้งเตือนด้วย Flex Message สี Cyan)
 fastify.post('/gas-logs', async (request, reply) => {
   const body = request.body as any;
   try {
     const newLog = await prisma.gas_logs.create({
       data: { permit_id: body.permit_id, tester_id: body.tester_id, o2_level: body.o2_level, lel_level: body.lel_level, co_level: body.co_level, h2s_level: body.h2s_level, safety_talk_done: body.safety_talk_done }
     });
+
+    // 🟢 ดึงข้อมูลมาเตรียมยิง LINE
+    const permit = await prisma.permit.findUnique({ where: { id: body.permit_id } });
+    const tester = await prisma.user.findUnique({ where: { id: body.tester_id } });
+
+    if (permit) {
+      const flex = createGasTestFlex(permit.permit_number, tester?.full_name || 'ผู้ตรวจสอบ', body.o2_level, body.lel_level, body.co_level, body.h2s_level, `${WEB_APP_URL}?page=E_PERMIT`);
+      
+      // ส่งหาคนคุมงาน (Area Owner และ Safety)
+      const notifyUsers = await prisma.user.findMany({ where: { role: { in: ['AREA_OWNER', 'SAFETY_ENGINEER'] }, line_id: { not: null } } });
+      for (const user of notifyUsers) {
+        if (user.line_id) await sendFlexPush(user.line_id, flex);
+      }
+      
+      // ส่งเข้ากลุ่มกลางไว้เพื่อเป็นประวัติ Log ด้วย
+      await sendFlexPush(LINE_TARGET_ID, flex);
+    }
+
     return reply.send({ message: 'บันทึกข้อมูลก๊าซสำเร็จ', data: newLog });
   } catch (error: any) { return reply.status(500).send({ error: 'ไม่สามารถบันทึกข้อมูลก๊าซได้', details: error.message }); }
 });
@@ -366,7 +415,7 @@ fastify.get('/permits/:id/gas-logs', async (request, reply) => {
   catch (error: any) { return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลก๊าซได้' }); }
 });
 
-// [PUT] อัปเดตสถานะ Permit (แยกแชทส่ง LINE)
+// 🌟 [PUT] อัปเดตสถานะ Permit (ย้ำเตือนเรื่อง APPROVED)
 fastify.put('/permits/:id', async (request, reply) => {
   const { id } = request.params as { id: string };
   const body = request.body as any; 
@@ -385,14 +434,17 @@ fastify.put('/permits/:id', async (request, reply) => {
       const flex = createPermitFlex("เจ้าของพื้นที่อนุมัติแล้ว รอ จป. ตรวจสอบ", updatedPermit.permit_number, "🟦 รอ จป. อนุมัติขั้นสุดท้าย", updatedPermit.location_detail, applicant?.full_name || '-', "#2563eb", `${WEB_APP_URL}?page=E_PERMIT`);
       for (const user of safetyUsers) if (user.line_id) await sendFlexPush(user.line_id, flex);
     } 
-    // 🟢 ถ้าเป็น APPROVED -> ส่งกลับหาผู้รับเหมา
+    // 🟢 ถ้าเป็น APPROVED -> ส่งหาผู้รับเหมา และแจ้งทุกคนในกลุ่มให้ทราบ
     else if (body.status === 'APPROVED') {
-      if (applicant?.line_id) {
-        const flex = createPermitFlex("ยินดีด้วย! เริ่มงานได้ทันที", updatedPermit.permit_number, "✅ อนุมัติสมบูรณ์", updatedPermit.location_detail, applicant.full_name, "#059669", `${WEB_APP_URL}?page=E_PERMIT`);
-        await sendFlexPush(applicant.line_id, flex);
-      }
+      const flex = createPermitFlex("จป. อนุมัติเรียบร้อย", updatedPermit.permit_number, "✅ อนุมัติสมบูรณ์ (เริ่มงานได้)", updatedPermit.location_detail, applicant?.full_name || '-', "#059669", `${WEB_APP_URL}?page=E_PERMIT`);
+      
+      // ส่งหาผู้ขอ
+      if (applicant?.line_id) await sendFlexPush(applicant.line_id, flex);
+      
+      // 🌟 ยิงเข้ากลุ่มเป้าหมาย (LINE_TARGET_ID) เพื่อประกาศว่า Permit ใบนี้ผ่านฉลุย
+      await sendFlexPush(LINE_TARGET_ID, flex);
     } 
-    // 🔴 ถ้าเป็น REJECTED -> ส่งหาผู้รับเหมาพร้อมเหตุผล
+    // 🔴 ถ้าเป็น REJECTED -> ส่งหาผู้รับเหมา
     else if (body.status === 'REJECTED') {
       if (applicant?.line_id) {
         const flex = createPermitFlex("คำขออนุญาตถูกปฏิเสธ", updatedPermit.permit_number, "❌ ไม่อนุมัติ", updatedPermit.location_detail, applicant.full_name, "#e11d48", `${WEB_APP_URL}?page=E_PERMIT`, body.comment || "ผิดมาตรการความปลอดภัย");
@@ -406,7 +458,7 @@ fastify.put('/permits/:id', async (request, reply) => {
   }
 });
 
-// ⏳ [PUT] ขอขยายเวลาทำงาน (ส่งแจ้งเตือนหา จป. และ Area Owner)
+// ⏳ [PUT] ขอขยายเวลาทำงาน
 fastify.put('/permits/:id/extend', async (request, reply) => {
   const { id } = request.params as { id: string };
   const { new_end_time, reason, requested_by } = request.body as any;
@@ -431,7 +483,6 @@ fastify.put('/permits/:id/extend', async (request, reply) => {
       `เหตุผล: ${reason} (เวลาใหม่: ${newTimeStr})`
     );
 
-    // ส่งหาคนคุมงาน (Area Owner + Safety)
     const approvers = await prisma.user.findMany({ where: { role: { in: ['AREA_OWNER', 'SAFETY_ENGINEER'] }, line_id: { not: null } } });
     for (const user of approvers) {
       if (user.line_id) await sendFlexPush(user.line_id, flex);
