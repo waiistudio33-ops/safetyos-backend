@@ -471,7 +471,16 @@ fastify.put('/permits/:id/extend', async (request, reply) => {
       where: { id }, data: { end_time: new Date(new_end_time), extension_reason: reason }
     });
 
-    const newTimeStr = new Date(new_end_time).toLocaleString('th-TH');
+    // 🟢 แก้ไขตรงนี้: บังคับให้แปลงเวลาเป็นโซนประเทศไทย (Asia/Bangkok) เสมอ พร้อมจัดฟอร์แมตให้สวยงาม
+    const newTimeStr = new Date(new_end_time).toLocaleString('th-TH', { 
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
     const flex = createPermitFlex(
       "แจ้งขอขยายเวลาทำงานหน้างาน", 
       permit.permit_number, 
@@ -480,7 +489,7 @@ fastify.put('/permits/:id/extend', async (request, reply) => {
       requested_by || permit.applicant?.full_name || '-', 
       "#9333ea", 
       `${WEB_APP_URL}?page=E_PERMIT`,
-      `เหตุผล: ${reason} (เวลาใหม่: ${newTimeStr})`
+      `เหตุผล: ${reason} (เวลาใหม่: ${newTimeStr} น.)` // 👈 จะออกมาเป็น "9 มี.ค. 2569, 15:30 น."
     );
 
     const approvers = await prisma.user.findMany({ where: { role: { in: ['AREA_OWNER', 'SAFETY_ENGINEER'] }, line_id: { not: null } } });
