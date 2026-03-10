@@ -285,7 +285,52 @@ fastify.post('/confined-space/evacuate', async (request: any, reply) => {
 fastify.get('/certificates', async (request, reply) => { return await prisma.certificate.findMany({ include: { user: true }, orderBy: { created_at: 'desc' } }); });
 fastify.post('/certificates', async (request, reply) => { const body = request.body as any; return await prisma.certificate.create({ data: { user_id: body.user_id, cert_name: body.cert_name, file_url: body.file_url, issued_date: new Date(body.issued_date), expiry_date: new Date(body.expiry_date), status: 'PENDING' } }); });
 fastify.put('/certificates/:id/verify', async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as any; return await prisma.certificate.update({ where: { id: id }, data: { status: body.status } }); });
-fastify.get('/courses', async (request, reply) => { return await prisma.course.findMany({ orderBy: { title: 'asc' } }); });
+// 🎓 [GET] ดึงข้อมูลคอร์สเรียน พร้อมเช็คสถานะการสอบของ User
+fastify.get('/courses', async (request: any, reply) => {
+  const { user_id } = request.query; // รับ ID ของคนที่กำลังล็อกอินมาด้วย
+
+  try {
+    // 1. ดึงวิชาเรียนทั้งหมด
+    const courses = await prisma.course.findMany({ orderBy: { title: 'asc' } });
+
+    // 2. ถ้าไม่ได้ส่ง user_id มา ก็ส่งกลับไปแค่วิชาธรรมดา
+    if (!user_id) return courses;
+
+    // 3. ถ้าส่ง user_id มา ให้ไปหาประวัติการสอบของคนๆ นี้
+    const userRecords = await prisma.trainingRecord.findMany({
+      where: { user_id: user_id }
+    });
+
+    // 4. เอาข้อมูลวิชา มาผสมกับ ประวัติการสอบ เพื่อสร้าง Status ให้หน้าบ้าน
+    const mappedCourses = courses.map((course) => {
+      // เช็คว่าเคยสอบวิชานี้ผ่านไหม?
+      const record = userRecords.find(r => r.course_id === course.id);
+      
+      let status = 'REQUIRED'; // ค่าเริ่มต้นคือ บังคับเรียน
+      let progress = 0;
+
+      if (record && record.passed) {
+        status = 'COMPLETED'; // ถ้าเจอประวัติว่าผ่านแล้ว ให้เป็นสีเขียว
+        progress = 100;
+      }
+
+      return {
+        id: course.id,
+        title: course.title,
+        description: course.description || 'ไม่มีคำอธิบาย',
+        videoUrl: course.video_url, // แมปชื่อตัวแปรให้ตรงกับหน้าบ้าน
+        thumbnail: course.thumbnail || 'https://images.unsplash.com/photo-1541888086925-920a0b40eb45?auto=format&fit=crop&w=500&q=80', // ถ้าระบบยังไม่มีรูปให้โชว์รูปจำลอง
+        duration: course.duration || 'ไม่ระบุเวลา',
+        status: status,
+        progress: progress
+      };
+    });
+
+    return mappedCourses;
+  } catch (error) {
+    return reply.status(500).send({ error: 'ดึงข้อมูลวิชาเรียนไม่สำเร็จ' });
+  }
+});
 fastify.post('/training-records', async (request, reply) => {
   const { user_id, course_id, score } = request.body as any;
   try {

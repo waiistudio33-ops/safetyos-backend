@@ -42,11 +42,14 @@ model Certificate {
 }
 
 model Course {
-  id            String           @id @default(uuid())
+  id            String   @id @default(uuid())
   title         String
   description   String?
-  video_url     String?
-  passing_score Int              @default(80)
+  video_url     String?  // มีอยู่แล้ว
+  passing_score Int      @default(80) // มีอยู่แล้ว
+  thumbnail     String?  // ลิงก์รูปปกคลิป
+  duration      String?  // ความยาวคลิป เช่น "45 นาที"
+  created_at    DateTime @default(now())
   records       TrainingRecord[]
 }
 
