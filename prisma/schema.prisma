@@ -51,6 +51,19 @@ model Course {
   duration      String?  // ความยาวคลิป เช่น "45 นาที"
   created_at    DateTime @default(now())
   records       TrainingRecord[]
+  questions     ExamQuestion[]
+}
+// 🟢 ตารางเก็บข้อสอบ
+model ExamQuestion {
+  id          String   @id @default(uuid())
+  course_id   String
+  course      Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  
+  question    String   // คำถาม
+  choices     Json     // ตัวเลือก ก,ข,ค,ง (เก็บเป็น Array)
+  answer      String   // คำตอบที่ถูกต้อง
+  
+  created_at  DateTime @default(now())
 }
 
 model TrainingRecord {

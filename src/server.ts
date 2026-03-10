@@ -287,48 +287,47 @@ fastify.post('/certificates', async (request, reply) => { const body = request.b
 fastify.put('/certificates/:id/verify', async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as any; return await prisma.certificate.update({ where: { id: id }, data: { status: body.status } }); });
 // 🎓 [GET] ดึงข้อมูลคอร์สเรียน พร้อมเช็คสถานะการสอบของ User
 fastify.get('/courses', async (request: any, reply) => {
-  const { user_id } = request.query; // รับ ID ของคนที่กำลังล็อกอินมาด้วย
+  const { user_id } = request.query; 
 
   try {
     // 1. ดึงวิชาเรียนทั้งหมด
-    const courses = await prisma.course.findMany({ orderBy: { title: 'asc' } });
+    const courses = await prisma.course.findMany({ orderBy: { created_at: 'desc' } });
 
-    // 2. ถ้าไม่ได้ส่ง user_id มา ก็ส่งกลับไปแค่วิชาธรรมดา
+    // 2. ถ้าไม่มี user_id หรือหาประวัติไม่ได้ ให้ส่ง REQUIRED ไปก่อนเพื่อไม่ให้ระบบค้าง
     if (!user_id) return courses;
 
-    // 3. ถ้าส่ง user_id มา ให้ไปหาประวัติการสอบของคนๆ นี้
-    const userRecords = await prisma.trainingRecord.findMany({
-      where: { user_id: user_id }
-    });
+    let userRecords: any[] = [];
+    try {
+      userRecords = await prisma.trainingRecord.findMany({
+        where: { user_id: String(user_id) }
+      });
+    } catch (e) {
+      console.error("Record fetching failed, but continuing...");
+    }
 
-    // 4. เอาข้อมูลวิชา มาผสมกับ ประวัติการสอบ เพื่อสร้าง Status ให้หน้าบ้าน
+    // 3. แมปข้อมูลแบบปลอดภัย (Safe Mapping)
     const mappedCourses = courses.map((course) => {
-      // เช็คว่าเคยสอบวิชานี้ผ่านไหม?
       const record = userRecords.find(r => r.course_id === course.id);
       
-      let status = 'REQUIRED'; // ค่าเริ่มต้นคือ บังคับเรียน
-      let progress = 0;
-
-      if (record && record.passed) {
-        status = 'COMPLETED'; // ถ้าเจอประวัติว่าผ่านแล้ว ให้เป็นสีเขียว
-        progress = 100;
-      }
+      const isPassed = record?.passed || false;
 
       return {
         id: course.id,
         title: course.title,
-        description: course.description || 'ไม่มีคำอธิบาย',
-        videoUrl: course.video_url, // แมปชื่อตัวแปรให้ตรงกับหน้าบ้าน
-        thumbnail: course.thumbnail || 'https://images.unsplash.com/photo-1541888086925-920a0b40eb45?auto=format&fit=crop&w=500&q=80', // ถ้าระบบยังไม่มีรูปให้โชว์รูปจำลอง
-        duration: course.duration || 'ไม่ระบุเวลา',
-        status: status,
-        progress: progress
+        description: course.description || '',
+        video_url: course.video_url || '',
+        thumbnail: course.thumbnail || '',
+        duration: course.duration || '',
+        status: isPassed ? 'COMPLETED' : 'REQUIRED',
+        progress: isPassed ? 100 : 0
       };
     });
 
     return mappedCourses;
-  } catch (error) {
-    return reply.status(500).send({ error: 'ดึงข้อมูลวิชาเรียนไม่สำเร็จ' });
+  } catch (error: any) {
+    console.error("🚨 Courses API Error:", error);
+    // ส่ง Error กลับแบบไม่อันตราย
+    return reply.status(500).send({ error: 'Internal Server Error', message: error.message });
   }
 });
 fastify.post('/training-records', async (request, reply) => {
@@ -341,7 +340,19 @@ fastify.post('/training-records', async (request, reply) => {
     return { message: isPassed ? 'ยินดีด้วย สอบผ่าน!' : 'เสียใจด้วย สอบไม่ผ่าน', record };
   } catch (error) { return reply.status(500).send({ error: 'ไม่สามารถบันทึกคะแนนสอบได้' }); }
 });
-
+// 📝 [GET] ดึงข้อสอบตามรายวิชา
+fastify.get('/courses/:id/questions', async (request: any, reply) => {
+  const { id } = request.params;
+  try {
+    const questions = await prisma.examQuestion.findMany({
+      where: { course_id: id }
+    });
+    return reply.send(questions);
+  } catch (error) {
+    console.error("Fetch Questions Error:", error);
+    return reply.status(500).send({ error: 'ดึงข้อมูลข้อสอบไม่สำเร็จ' });
+  }
+});
 // ========================================================
 // ⚠️ MODULE 2: ระบบแจ้งจุดเสี่ยง (Incident Report)
 // ========================================================
