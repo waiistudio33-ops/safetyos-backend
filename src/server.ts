@@ -133,39 +133,20 @@ fastify.get('/', async (request, reply) => {
 });
 
 // 🚀 ========================================================
-// 🔐 ระบบ LOGIN (อัปเกรด Auto-Register สำหรับผู้รับเหมา)
+// 🔐 ระบบ LOGIN
 // ========================================================
 fastify.post('/login/line', async (request: any, reply) => {
-  // 🟢 รับชื่อ displayName จาก LINE มาด้วย
-  const { line_id, picture_url, display_name } = request.body; 
+  const { line_id, picture_url } = request.body;
   try {
     if (!line_id) return reply.status(400).send({ error: 'ไม่พบ LINE ID' });
-    
     let user = await prisma.user.findFirst({ where: { line_id: line_id } });
-    
-    // 🌟 ถ้าไม่เคยมีชื่อในระบบเลย ให้ "ลงทะเบียนเป็นผู้รับเหมาใหม่" อัตโนมัติ!
-    if (!user) {
-      user = await prisma.user.create({
-        data: {
-          full_name: display_name || 'ผู้รับเหมา (LINE)',
-          username: `line_${line_id.substring(0, 6)}`, // สุ่ม username ให้
-          password: 'NO_PASSWORD', // ล็อกอินผ่าน LINE ไม่ต้องใช้รหัสผ่าน
-          role: 'CONTRACTOR',      // บังคับให้เป็นผู้รับเหมา
-          department: 'บริษัทผู้รับเหมา (รอยืนยัน)',
-          line_id: line_id,
-          profile_url: picture_url
-        }
-      });
-      return { message: 'ลงทะเบียนผู้รับเหมาใหม่สำเร็จ!', user, isNew: true };
-    }
+    if (!user) return reply.status(401).send({ error: 'ยังไม่ได้ผูกบัญชี LINE' });
 
-    // ถ้ามีชื่ออยู่แล้ว แค่อัปเดตรูป
     if (picture_url && user.profile_url !== picture_url) {
       user = await prisma.user.update({ where: { id: user.id }, data: { profile_url: picture_url } });
     }
-    return { message: 'เข้าสู่ระบบอัตโนมัติสำเร็จ', user, isNew: false };
+    return { message: 'เข้าสู่ระบบอัตโนมัติสำเร็จ', user };
   } catch (error) {
-    console.error("Line Login Error:", error);
     return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในระบบเซิร์ฟเวอร์' });
   }
 });
