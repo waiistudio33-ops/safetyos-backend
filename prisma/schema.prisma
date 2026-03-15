@@ -42,28 +42,29 @@ model Certificate {
 }
 
 model Course {
-  id            String   @id @default(uuid())
+  id            String           @id @default(uuid())
   title         String
   description   String?
   video_url     String?  // มีอยู่แล้ว
-  passing_score Int      @default(80) // มีอยู่แล้ว
+  passing_score Int              @default(80) // มีอยู่แล้ว
   thumbnail     String?  // ลิงก์รูปปกคลิป
   duration      String?  // ความยาวคลิป เช่น "45 นาที"
-  created_at    DateTime @default(now())
+  created_at    DateTime         @default(now())
   records       TrainingRecord[]
   questions     ExamQuestion[]
 }
+
 // 🟢 ตารางเก็บข้อสอบ
 model ExamQuestion {
-  id          String   @id @default(uuid())
-  course_id   String
-  course      Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  id         String   @id @default(uuid())
+  course_id  String
+  course     Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
   
-  question    String   // คำถาม
-  choices     Json     // ตัวเลือก ก,ข,ค,ง (เก็บเป็น Array)
-  answer      String   // คำตอบที่ถูกต้อง
+  question   String   // คำถาม
+  choices    Json     // ตัวเลือก ก,ข,ค,ง (เก็บเป็น Array)
+  answer     String   // คำตอบที่ถูกต้อง
   
-  created_at  DateTime @default(now())
+  created_at DateTime @default(now())
 }
 
 model TrainingRecord {
@@ -92,12 +93,12 @@ model IncidentReport {
 }
 
 model Equipment {
-  id      String                   @id @default(uuid())
-  qr_code String                   @unique
-  name    String
-  type    String
-  status  String                   @default("NORMAL")
-  logs    EquipmentInspectionLog[]
+  id       String                   @id @default(uuid())
+  qr_code  String                   @unique
+  name     String
+  type     String
+  status   String                   @default("NORMAL")
+  logs     EquipmentInspectionLog[]
 }
 
 model EquipmentInspectionLog {
@@ -134,6 +135,32 @@ model Permit {
   attachments         PermitAttachment[]
   gas_logs            gas_logs[]
   extension_reason    String?
+
+  // ==========================================
+  // 🟢 [NEW] เพิ่มฟิลด์ใหม่สำหรับรองรับกฎหมาย Confined Space และ LOTO
+  // ==========================================
+  supervisor_name      String?   // ผู้ควบคุมงาน (บังคับมีในที่อับอากาศ)
+  rescue_plan_url      String?   // ไฟล์แนบแผนกู้ภัยฉุกเฉิน
+  is_med_cert_verified Boolean   @default(false) // ยืนยันว่าตรวจใบรับรองแพทย์ Fit for work แล้ว
+  is_loto_required     Boolean   @default(false) // ระบุว่างานนี้ต้องตัดแยกพลังงาน (LOTO) หรือไม่?
+  loto_records         LotoRecord[] // เชื่อมความสัมพันธ์ไปที่ตารางเก็บจุดตัดแยก LOTO
+}
+
+// ==========================================
+// 🔴 [NEW] สร้างตารางใหม่ สำหรับเก็บประวัติการตัดแยกพลังงาน (LOTO)
+// ==========================================
+model LotoRecord {
+  id              String   @id @default(uuid())
+  permit_id       String
+  permit          Permit   @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+  
+  isolation_point String   // จุดตัดแยกพลังงาน (เช่น วาล์ว V-101, เบรกเกอร์ MDB-02)
+  energy_type     String   // ประเภทพลังงาน (เช่น ELECTRICAL, MECHANICAL, CHEMICAL, PNEUMATIC)
+  lock_number     String   // หมายเลขแม่กุญแจ (Personal Lock)
+  
+  is_verified     Boolean  @default(false) // ตรวจสอบสถานะ Zero Energy (พลังงานเป็นศูนย์) หรือยัง?
+  verified_by     String?  // ชื่อผู้ตรวจสอบ
+  created_at      DateTime @default(now())
 }
 
 model ApprovalLog {
@@ -159,21 +186,21 @@ model PermitAttachment {
 }
 
 model BbsObservation {
-  id             String        @id @default(uuid())
-  date           DateTime      @default(now())
-  location       String
+  id            String        @id @default(uuid())
+  date          DateTime      @default(now())
+  location      String
   observed_group ObservedGroup @default(EMPLOYEE)
   behavior_type  BehaviorType
-  category       BbsCategory
-  action_taken   ActionTaken
-  description    String
-  root_cause     RootCause?
-  suggestion     String?
-  photos         String[]
-  observer_id    String
-  created_at     DateTime      @default(now())
-  updated_at     DateTime      @updatedAt
-  observer       User          @relation(fields: [observer_id], references: [id])
+  category      BbsCategory
+  action_taken  ActionTaken
+  description   String
+  root_cause    RootCause?
+  suggestion    String?
+  photos        String[]
+  observer_id   String
+  created_at    DateTime      @default(now())
+  updated_at    DateTime      @updatedAt
+  observer      User          @relation(fields: [observer_id], references: [id])
 }
 
 model ConfinedSpaceEntry {
