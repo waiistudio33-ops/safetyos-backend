@@ -35,55 +35,106 @@ model User {
 // 📋 [NEW] ระบบ E-Permit V2 (Enterprise Schema)
 // ==========================================
 model permits_v2 {
-  id               String   @id @default(uuid())
-  permit_number    String   @unique
-  title            String
-  description      String?
-  permit_type      String
-  status           String   @default("PENDING_AREA_OWNER")
-  location_detail  String
-  start_time       DateTime
-  end_time         DateTime
-  created_at       DateTime @default(now())
-  updated_at       DateTime @updatedAt
-  applicant_id     String?
+  id              String   @id @default(uuid())
+  permit_number   String   @unique
+  title           String
+  description     String?
+  permit_type     String
+  status          String   @default("PENDING_AREA_OWNER")
+  location_detail String
+  start_time      DateTime
+  end_time        DateTime
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  // ข้อมูลผู้ขออนุญาต และ ผู้รับเหมา (ครบตามฟอร์ม)
+  applicant_id          String?
+  applicant_phone       String? // เบอร์โทรศัพท์
+  contractor_company    String? // บริษัทผู้รับเหมา
+  contractor_supervisor String? // หัวหน้างานผู้รับเหมา
+  project_manager       String? // ผู้จัดการโครงการ
+
   extension_reason String?
 
-  // 🟢 [NEW] ฟิลด์ JSON สำหรับเก็บข้อมูลที่ยืดหยุ่นได้ (Checklists)
-  work_sub_type    Json?    // เช่น ["เจียร/ตัด", "เชื่อมไฟฟ้า"]
-  tools_equipment  Json?    // เครื่องมือที่ใช้ (เก็บเป็น Array หรือ Object)
-  safety_measures  Json?    // มาตรการที่ติ๊กเลือก (เช่น กั้นพื้นที่, ติดป้ายเตือน)
-  ppe_required     Json?    // PPE ที่ติ๊กเลือก (หมวก, รองเท้า, SCBA)
-  
-  // 🟢 [NEW] สำหรับการปิดงาน (Closing)
-  is_closed        Boolean  @default(false)
-  closeout_note    String?
-  closed_at        DateTime?
+  // ฟิลด์ JSON สำหรับเก็บข้อมูลที่ยืดหยุ่นได้ (Checklists)
+  work_sub_type   Json? // เช่น ["เจียร/ตัด", "เชื่อมไฟฟ้า"]
+  tools_equipment Json? // เครื่องมือที่ใช้ (เก็บเป็น Array หรือ Object)
+  safety_measures Json? // มาตรการที่ติ๊กเลือก (เช่น กั้นพื้นที่, ติดป้ายเตือน)
+  ppe_required    Json? // PPE ที่ติ๊กเลือก (หมวก, รองเท้า, SCBA)
+  attached_docs   Json? // เช็คลิสต์เอกสารแนบ เช่น {"jsa": true, "sds": "Benzene"}
 
-  applicant             User?                   @relation(fields: [applicant_id], references: [id])
-  hazard_details        permit_hazard_details[]
-  gas_logs              permit_gas_logs[]
-  approval_logs         ApprovalLog[]
-  attachments           PermitAttachment[]
-  confined_entries      ConfinedSpaceEntry[]
-  loto_records          loto_records_v2[]
+  // สำหรับการปิดงาน (Closing)
+  is_closed       Boolean   @default(false)
+  closeout_status String? // เช่น "SAFE", "RISKY"
+  closeout_note   String? // สาเหตุถ้ามีความเสี่ยง
+  closed_at       DateTime?
+
+  // ความสัมพันธ์ (Relations)
+  applicant         User?                   @relation(fields: [applicant_id], references: [id])
+  hazard_details    permit_hazard_details[]
+  gas_logs          permit_gas_logs[]
+  approval_logs     ApprovalLog[]
+  attachments       PermitAttachment[]
+  confined_entries  ConfinedSpaceEntry[]
+  loto_records      loto_records_v2[]
+  workers           PermitWorker[] // 🟢 รายชื่อผู้ปฏิบัติงาน
+  daily_inspections PermitDailyInspection[] // 🟢 ตรวจสอบความปลอดภัยรายวัน
+  extensions        PermitExtension[] // 🟢 ประวัติการขอต่อเวลา
+}
+
+// 🟢 [NEW] ตารางเก็บรายชื่อผู้ปฏิบัติงาน (หน้า 1 ของทุกฟอร์ม)
+model PermitWorker {
+  id          String @id @default(uuid())
+  permit_id   String
+  worker_name String
+
+  permit permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+}
+
+// 🟢 [NEW] ตารางตรวจสอบการปฏิบัติงานประจำวัน (หน้า 2 ฟอร์ม Hot Work)
+model PermitDailyInspection {
+  id                   String   @id @default(uuid())
+  permit_id            String
+  inspection_date      DateTime // วันที่ตรวจ
+  electrical_checked   Boolean  @default(false)
+  gas_cylinder_checked Boolean  @default(false)
+  fire_equip_checked   Boolean  @default(false)
+  ppe_checked          Boolean  @default(false)
+  other_notes          String?
+  inspector_name       String?
+
+  permit permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+}
+
+// 🟢 [NEW] ตารางการขอต่ออายุใบอนุญาตทำงาน
+model PermitExtension {
+  id             String   @id @default(uuid())
+  permit_id      String
+  request_date   DateTime @default(now())
+  new_start_time DateTime
+  new_end_time   DateTime
+  action_details String? // รายละเอียดการดำเนินงาน
+  applicant_name String?
+  approver_name  String?
+
+  permit permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
 }
 
 model permit_hazard_details {
-  permit_id            String  @id
-  supervisor_name      String?
-  gas_tester_name      String?
-  standby_person_name  String?
-  
-  // 🟢 [NEW] สำหรับงานที่สูง (Work at Height)
-  height_level         Float?  // ความสูง (เมตร)
-  
-  // 🟢 [NEW] สำหรับงานอับอากาศ (Confined Space)
+  permit_id           String  @id
+  supervisor_name     String?
+  gas_tester_name     String?
+  standby_person_name String?
+
+  // สำหรับงานที่สูง (Work at Height)
+  height_level Float? // ความสูง (เมตร)
+
+  // สำหรับงานอับอากาศ (Confined Space)
   rescuer_name         String? // ผู้ช่วยเหลือ (Rescuer)
   communication_method String? // ช่องทางสื่อสารกับทีมช่วยเหลือ
-  
-  // 🟢 [NEW] อุปกรณ์ดับเพลิง
-  fire_extinguisher    Json?   // เช่น { required: true, type: "CO2", amount: 2 }
+
+  // อุปกรณ์ดับเพลิง
+  fire_extinguisher Json? // เช่น { required: true, type: "CO2", amount: 2 }
 
   rescue_plan_url      String?
   is_med_cert_verified Boolean @default(false)
