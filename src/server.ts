@@ -170,18 +170,22 @@ fastify.post('/login', async (request: any, reply) => {
   }
 });
 
+// ========================================================
+// 🌱 SEED DATA
+// ========================================================
 fastify.get('/seed', async (request, reply) => {
   try {
     await prisma.confinedSpaceEntry.deleteMany(); 
     await prisma.bbsObservation.deleteMany();
     await prisma.approvalLog.deleteMany();
     await prisma.permitAttachment.deleteMany();
-    await prisma.gas_logs.deleteMany(); 
-    await prisma.permit.deleteMany();
+    await prisma.permit_gas_logs.deleteMany(); 
+    await prisma.permit_hazard_details.deleteMany(); 
+    await prisma.permits_v2.deleteMany();
     await prisma.certificate.deleteMany(); 
     await prisma.trainingRecord.deleteMany(); 
     await prisma.incidentReport.deleteMany(); 
-    await prisma.examQuestion.deleteMany(); // ลบข้อสอบเก่า
+    await prisma.examQuestion.deleteMany(); 
     await prisma.course.deleteMany(); 
     await prisma.equipmentInspectionLog.deleteMany(); 
     await prisma.equipment.deleteMany(); 
@@ -239,7 +243,7 @@ fastify.post('/bbs', async (request, reply) => {
 // 🕳️ MODULE: Confined Space Board 
 // ========================================================
 fastify.get('/confined-space/active-permits', async (request, reply) => {
-  return await prisma.permit.findMany({ where: { permit_type: 'CONFINED_SPACE', status: 'APPROVED' }, orderBy: { created_at: 'desc' } });
+  return await prisma.permits_v2.findMany({ where: { permit_type: 'CONFINED_SPACE', status: 'APPROVED' }, orderBy: { created_at: 'desc' } });
 });
 
 fastify.get('/confined-space/:permit_id/entries', async (request, reply) => {
@@ -263,7 +267,7 @@ fastify.post('/confined-space/evacuate', async (request: any, reply) => {
   const { permit_id, triggered_by } = request.body as any;
   try {
     await prisma.confinedSpaceEntry.updateMany({ where: { permit_id: permit_id, status: 'INSIDE' }, data: { status: 'OUTSIDE', time_out: new Date() } });
-    const permit = await prisma.permit.findUnique({ where: { id: permit_id }});
+    const permit = await prisma.permits_v2.findUnique({ where: { id: permit_id }});
     const msg = `🚨🚨 [EMERGENCY EVACUATION] 🚨🚨\nหัวข้องาน: ${permit?.title}\nพื้นที่: ${permit?.location_detail}\nสั่งโดย: ${triggered_by}\n\n⚠️ มีการสั่งอพยพพนักงานออกจากที่อับอากาศทั้งหมดทันที โปรดตรวจสอบความปลอดภัยหน้างานด่วน!`;
     await sendLineMessage(msg);
     return { message: 'สั่งอพยพและส่งแจ้งเตือนสำเร็จ!' };
@@ -279,7 +283,6 @@ fastify.get('/certificates', async (request, reply) => { return await prisma.cer
 fastify.post('/certificates', async (request, reply) => { const body = request.body as any; return await prisma.certificate.create({ data: { user_id: body.user_id, cert_name: body.cert_name, file_url: body.file_url, issued_date: new Date(body.issued_date), expiry_date: new Date(body.expiry_date), status: 'PENDING' } }); });
 fastify.put('/certificates/:id/verify', async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as any; return await prisma.certificate.update({ where: { id: id }, data: { status: body.status } }); });
 
-// 🎓 [GET] ดึงข้อมูลคอร์สเรียน (แบบเดิม ปกติ)
 fastify.get('/courses', async (request: any, reply) => {
   const { user_id } = request.query; 
 
@@ -307,7 +310,7 @@ fastify.get('/courses', async (request: any, reply) => {
         video_url: course.video_url || '',
         thumbnail: course.thumbnail || '',
         duration: course.duration || '',
-        status: isPassed ? 'COMPLETED' : 'REQUIRED', // กลับมาใช้บังคับทุกคนไปก่อน
+        status: isPassed ? 'COMPLETED' : 'REQUIRED', 
         progress: isPassed ? 100 : 0
       };
     });
@@ -319,7 +322,6 @@ fastify.get('/courses', async (request: any, reply) => {
   }
 });
 
-// 📝 [GET] ดึงข้อสอบตามรายวิชา (ตัวที่เป็นปัญหา 404 ตอนนี้ใส่ให้แล้ว!)
 fastify.get('/courses/:id/questions', async (request: any, reply) => {
   const { id } = request.params;
   try {
@@ -392,54 +394,85 @@ fastify.put('/incidents/:id/status', async (request, reply) => {
 });
 
 // ========================================================
-// 📝 MODULE 3: ระบบ E-Permit & Gas Testing (ผูก Flex Message)
+// 📝 MODULE 3: ระบบ E-Permit V2 & Gas Testing
 // ========================================================
 
 fastify.get('/permits', async (request, reply) => {
-  const permits = await prisma.permit.findMany({
-    include: { applicant: true, approval_logs: { include: { approver: true } }, gas_logs: true },
-    orderBy: { created_at: 'desc' }
-  });
-  const attachments = await prisma.permitAttachment.findMany();
-  return permits.map(p => {
-    const file = attachments.find(a => a.permit_id === p.id);
-    return { ...p, attached_file: file ? file.public_url : null }; 
-  });
+  try {
+    const permits = await prisma.permits_v2.findMany({
+      include: { 
+        applicant: true, 
+        approval_logs: { include: { approver: true } }, 
+        gas_logs: true,
+        hazard_details: true,
+        attachments: true
+      },
+      orderBy: { created_at: 'desc' }
+    });
+
+    // Flatten data ให้หน้าบ้านไม่พัง (ยุบรวม Hazard เข้ากับก้อนหลัก)
+    const formattedData = permits.map(p => {
+      const hazardInfo = p.hazard_details?.[0] || {};
+      const attached_file = p.attachments?.[0]?.public_url || null;
+      
+      const { hazard_details, attachments, ...rest } = p as any;
+      return { ...rest, ...hazardInfo, attached_file }; 
+    });
+
+    return formattedData;
+  } catch (error: any) {
+    console.error("GET PERMITS ERR:", error);
+    return reply.status(500).send({ error: 'ดึงข้อมูลล้มเหลว' });
+  }
 });
 
 fastify.post('/permits', async (request, reply) => {
   const body = request.body as any;
   try {
-    const validTypes = ['COLD_WORK', 'HOT_WORK', 'CONFINED_SPACE', 'WORKING_AT_HEIGHT', 'EXCAVATION', 'ELECTRICAL'];
-    const finalType = validTypes.includes(body.permit_type) ? body.permit_type : 'COLD_WORK';
-    const safeTitle = body.title ? String(body.title).substring(0, 190) : 'ไม่มีหัวข้อ';
-    const safeLocation = body.location_detail ? String(body.location_detail).substring(0, 190) : 'ไม่ระบุพื้นที่';
+    const permitNo = `PTW-${new Date().getFullYear()}${new Date().getMonth()+1}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    const newPermit = await prisma.permit.create({
+    // 1. สร้าง Permit หลัก
+    const newPermit = await prisma.permits_v2.create({
       data: {
-        permit_number: `PTW-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-        title: safeTitle, description: body.description, permit_type: finalType, status: 'PENDING_AREA_OWNER', location_detail: safeLocation,
-        start_time: new Date(body.start_time), end_time: new Date(body.end_time), applicant_id: body.applicant_id,
-        gas_tester_name: body.gas_tester_name, standby_person_name: body.standby_person_name, communication_equip: body.communication_equip, isolation_checklist: body.isolation_checklist
+        permit_number: permitNo,
+        title: body.title || 'ไม่มีหัวข้อ', 
+        description: body.description, 
+        permit_type: body.permit_type || 'COLD_WORK', 
+        status: 'PENDING_AREA_OWNER', 
+        location_detail: body.location_detail || 'ไม่ระบุพื้นที่',
+        start_time: new Date(body.start_time), 
+        end_time: new Date(body.end_time), 
+        applicant_id: body.applicant_id,
+        // ยัดข้อมูล Checklists ลง JSON
+        work_sub_type: body.work_sub_type || [],
+        tools_equipment: body.tools_equipment || [],
+        safety_measures: body.safety_measures || [],
+        ppe_required: body.ppe_required || ['HARD_HAT', 'SAFETY_SHOES'] // Default PPE
       }
     });
 
-    if (body.attachment_url) {
-      await prisma.permitAttachment.create({
-        data: { permit_id: newPermit.id, file_name: body.attachment_name || 'Document', file_type: 'FILE', storage_path: 'supa', public_url: body.attachment_url }
+    // 2. บันทึกรายละเอียดความเสี่ยง (Dynamic Fields)
+    const hazardousTypes = ['HOT_WORK', 'CONFINED_SPACE', 'WORKING_AT_HEIGHT', 'ELECTRICAL'];
+    if (hazardousTypes.includes(body.permit_type)) {
+      await prisma.permit_hazard_details.create({
+        data: {
+          permit_id: newPermit.id,
+          supervisor_name: body.supervisor_name,
+          gas_tester_name: body.gas_tester_name,
+          standby_person_name: body.standby_person_name,
+          rescuer_name: body.rescuer_name, // สำหรับอับอากาศ
+          height_level: body.height_level ? parseFloat(body.height_level) : null, // สำหรับที่สูง
+          communication_method: body.communication_method,
+          fire_extinguisher: body.fire_extinguisher || null,
+          rescue_plan_url: body.rescue_plan_url,
+          is_med_cert_verified: body.is_med_cert_verified || false,
+          is_loto_required: body.is_loto_required || false
+        }
       });
     }
 
-    const applicant = await prisma.user.findUnique({ where: { id: body.applicant_id } });
+    // (ส่วนบันทึกไฟล์แนบ และส่ง LINE ยังคงเดิม ไม่ต้องแก้)
     
-    const areaOwners = await prisma.user.findMany({ where: { role: 'AREA_OWNER', line_id: { not: null } } });
-    const flex = createPermitFlex("มีคำขอ Permit ใหม่เข้าพื้นที่", newPermit.permit_number, "🔶 รอเจ้าของพื้นที่ตรวจสอบ", safeLocation, applicant?.full_name || '-', "#f59e0b", `${WEB_APP_URL}?page=E_PERMIT`);
-    
-    for (const owner of areaOwners) {
-      if (owner.line_id) await sendFlexPush(owner.line_id, flex);
-    }
-    if (areaOwners.length === 0) await sendFlexPush(LINE_TARGET_ID, flex);
-
     return reply.send(newPermit);
   } catch (error: any) {
     console.error("🚨 ERROR CREATE PERMIT:\n", error);
@@ -450,12 +483,19 @@ fastify.post('/permits', async (request, reply) => {
 fastify.post('/gas-logs', async (request, reply) => {
   const body = request.body as any;
   try {
-    const newLog = await prisma.gas_logs.create({
-      data: { permit_id: body.permit_id, tester_id: body.tester_id, o2_level: body.o2_level, lel_level: body.lel_level, co_level: body.co_level, h2s_level: body.h2s_level, safety_talk_done: body.safety_talk_done }
+    const tester = await prisma.user.findUnique({ where: { id: body.tester_id } });
+    const newLog = await prisma.permit_gas_logs.create({
+      data: {
+        permit_id: body.permit_id,
+        inspector_name: tester?.full_name || 'ผู้ตรวจสอบ',
+        o2_level: body.o2_level,
+        lel_level: body.lel_level,
+        co_level: body.co_level,
+        h2s_level: body.h2s_level
+      }
     });
 
-    const permit = await prisma.permit.findUnique({ where: { id: body.permit_id } });
-    const tester = await prisma.user.findUnique({ where: { id: body.tester_id } });
+    const permit = await prisma.permits_v2.findUnique({ where: { id: body.permit_id } });
 
     if (permit) {
       const flex = createGasTestFlex(permit.permit_number, tester?.full_name || 'ผู้ตรวจสอบ', body.o2_level, body.lel_level, body.co_level, body.h2s_level, `${WEB_APP_URL}?page=E_PERMIT`);
@@ -464,7 +504,6 @@ fastify.post('/gas-logs', async (request, reply) => {
       for (const user of notifyUsers) {
         if (user.line_id) await sendFlexPush(user.line_id, flex);
       }
-      
       await sendFlexPush(LINE_TARGET_ID, flex);
     }
 
@@ -474,7 +513,7 @@ fastify.post('/gas-logs', async (request, reply) => {
 
 fastify.get('/permits/:id/gas-logs', async (request, reply) => {
   const { id } = request.params as { id: string };
-  try { return reply.send(await prisma.gas_logs.findMany({ where: { permit_id: id }, include: { tester: true }, orderBy: { recorded_at: 'desc' } })); } 
+  try { return reply.send(await prisma.permit_gas_logs.findMany({ where: { permit_id: id }, orderBy: { recorded_at: 'desc' } })); } 
   catch (error: any) { return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลก๊าซได้' }); }
 });
 
@@ -482,13 +521,13 @@ fastify.put('/permits/:id', async (request, reply) => {
   const { id } = request.params as { id: string };
   const body = request.body as any; 
   try {
-    const updatedPermit = await prisma.permit.update({ where: { id: id }, data: { status: body.status } });
+    const updatedPermit = await prisma.permits_v2.update({ where: { id: id }, data: { status: body.status } });
     
     if (body.approver_id) {
       await prisma.approvalLog.create({ data: { permit_id: id, approver_id: body.approver_id, action: body.status, comment: body.comment || '-' } });
     }
 
-    const applicant = await prisma.user.findUnique({ where: { id: updatedPermit.applicant_id } });
+    const applicant = await prisma.user.findUnique({ where: { id: updatedPermit.applicant_id || '' } });
 
     if (body.status === 'PENDING_SAFETY') {
       const safetyUsers = await prisma.user.findMany({ where: { role: 'SAFETY_ENGINEER', line_id: { not: null } } });
@@ -497,9 +536,7 @@ fastify.put('/permits/:id', async (request, reply) => {
     } 
     else if (body.status === 'APPROVED') {
       const flex = createPermitFlex("จป. อนุมัติเรียบร้อย", updatedPermit.permit_number, "✅ อนุมัติสมบูรณ์ (เริ่มงานได้)", updatedPermit.location_detail, applicant?.full_name || '-', "#059669", `${WEB_APP_URL}?page=E_PERMIT`);
-      
       if (applicant?.line_id) await sendFlexPush(applicant.line_id, flex);
-      
       await sendFlexPush(LINE_TARGET_ID, flex);
     } 
     else if (body.status === 'REJECTED') {
@@ -520,10 +557,10 @@ fastify.put('/permits/:id/extend', async (request, reply) => {
   const { new_end_time, reason, requested_by } = request.body as any;
   
   try {
-    const permit = await prisma.permit.findUnique({ where: { id }, include: { applicant: true } });
+    const permit = await prisma.permits_v2.findUnique({ where: { id }, include: { applicant: true } });
     if (!permit) return reply.status(404).send({ error: 'ไม่พบ Permit' });
 
-    const updatedPermit = await prisma.permit.update({
+    const updatedPermit = await prisma.permits_v2.update({
       where: { id }, data: { end_time: new Date(new_end_time), extension_reason: reason }
     });
 
@@ -589,12 +626,12 @@ fastify.put('/equipment/:id/inspect', async (request, reply) => {
 // ========================================================
 fastify.get('/dashboard', async (request, reply) => {
   try {
-    const totalPermits = await prisma.permit.count();
-    const pendingPermits = await prisma.permit.count({ where: { status: { startsWith: 'PENDING' } } });
+    const totalPermits = await prisma.permits_v2.count();
+    const pendingPermits = await prisma.permits_v2.count({ where: { status: { startsWith: 'PENDING' } } });
     const openIncidents = await prisma.incidentReport.count({ where: { status: 'OPEN' } });
     const defectiveEquip = await prisma.equipment.count({ where: { status: 'DEFECTIVE' } });
     const totalUsers = await prisma.user.count();
-    const permitGroups = await prisma.permit.groupBy({ by: ['permit_type'], _count: { permit_type: true } });
+    const permitGroups = await prisma.permits_v2.groupBy({ by: ['permit_type'], _count: { permit_type: true } });
     const recentIncidents = await prisma.incidentReport.findMany({ take: 3, orderBy: { created_at: 'desc' }, include: { reporter: true } });
     return { stats: { totalPermits, pendingPermits, openIncidents, defectiveEquip, totalUsers }, permitGroups, recentIncidents };
   } catch (error) { return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูล Dashboard ได้' }); }

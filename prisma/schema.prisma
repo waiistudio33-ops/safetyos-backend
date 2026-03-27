@@ -9,26 +9,154 @@ datasource db {
 }
 
 model User {
-  id               String                   @id @default(uuid())
-  full_name        String
-  department       String
-  role             String
-  status           String                   @default("ACTIVE")
-  profile_url      String?
-  created_at       DateTime                 @default(now())
-  username         String?                  @unique
-  password         String?
-  line_id          String?                  @unique
+  id          String   @id @default(uuid())
+  full_name   String
+  department  String
+  role        String
+  status      String   @default("ACTIVE")
+  profile_url String?
+  created_at  DateTime @default(now())
+  username    String?  @unique
+  password    String?
+  line_id     String?  @unique
+
   approvals        ApprovalLog[]
   bbs_observations BbsObservation[]
   certificates     Certificate[]
   equipment_logs   EquipmentInspectionLog[]
   incident_reports IncidentReport[]
-  permits          Permit[]
   training_records TrainingRecord[]
-  gas_logs         gas_logs[]
+
+  // เชื่อมกับตาราง Permit V2
+  permits permits_v2[]
 }
 
+// ==========================================
+// 📋 [NEW] ระบบ E-Permit V2 (Enterprise Schema)
+// ==========================================
+model permits_v2 {
+  id               String   @id @default(uuid())
+  permit_number    String   @unique
+  title            String
+  description      String?
+  permit_type      String
+  status           String   @default("PENDING_AREA_OWNER")
+  location_detail  String
+  start_time       DateTime
+  end_time         DateTime
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+  applicant_id     String?
+  extension_reason String?
+
+  // 🟢 [NEW] ฟิลด์ JSON สำหรับเก็บข้อมูลที่ยืดหยุ่นได้ (Checklists)
+  work_sub_type    Json?    // เช่น ["เจียร/ตัด", "เชื่อมไฟฟ้า"]
+  tools_equipment  Json?    // เครื่องมือที่ใช้ (เก็บเป็น Array หรือ Object)
+  safety_measures  Json?    // มาตรการที่ติ๊กเลือก (เช่น กั้นพื้นที่, ติดป้ายเตือน)
+  ppe_required     Json?    // PPE ที่ติ๊กเลือก (หมวก, รองเท้า, SCBA)
+  
+  // 🟢 [NEW] สำหรับการปิดงาน (Closing)
+  is_closed        Boolean  @default(false)
+  closeout_note    String?
+  closed_at        DateTime?
+
+  applicant             User?                   @relation(fields: [applicant_id], references: [id])
+  hazard_details        permit_hazard_details[]
+  gas_logs              permit_gas_logs[]
+  approval_logs         ApprovalLog[]
+  attachments           PermitAttachment[]
+  confined_entries      ConfinedSpaceEntry[]
+  loto_records          loto_records_v2[]
+}
+
+model permit_hazard_details {
+  permit_id            String  @id
+  supervisor_name      String?
+  gas_tester_name      String?
+  standby_person_name  String?
+  
+  // 🟢 [NEW] สำหรับงานที่สูง (Work at Height)
+  height_level         Float?  // ความสูง (เมตร)
+  
+  // 🟢 [NEW] สำหรับงานอับอากาศ (Confined Space)
+  rescuer_name         String? // ผู้ช่วยเหลือ (Rescuer)
+  communication_method String? // ช่องทางสื่อสารกับทีมช่วยเหลือ
+  
+  // 🟢 [NEW] อุปกรณ์ดับเพลิง
+  fire_extinguisher    Json?   // เช่น { required: true, type: "CO2", amount: 2 }
+
+  rescue_plan_url      String?
+  is_med_cert_verified Boolean @default(false)
+  is_loto_required     Boolean @default(false)
+
+  permit permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+}
+
+model permit_gas_logs {
+  id             String   @id @default(uuid())
+  permit_id      String
+  o2_level       Float?
+  lel_level      Float?
+  co_level       Float?
+  h2s_level      Float?
+  recorded_at    DateTime @default(now())
+  inspector_name String?
+
+  permit permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+}
+
+model loto_records_v2 {
+  id              String   @id @default(uuid())
+  permit_id       String
+  isolation_point String // จุดตัดแยกพลังงาน
+  energy_type     String // ประเภทพลังงาน (ELECTRICAL, MECHANICAL, ฯลฯ)
+  lock_number     String // หมายเลขแม่กุญแจ
+  is_verified     Boolean  @default(false)
+  verified_by     String?
+  created_at      DateTime @default(now())
+
+  permit permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+}
+
+model PermitAttachment {
+  id           String   @id @default(uuid())
+  permit_id    String
+  file_name    String
+  file_type    String
+  storage_path String
+  public_url   String
+  uploaded_at  DateTime @default(now())
+
+  permit permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+}
+
+model ApprovalLog {
+  id          String   @id @default(uuid())
+  permit_id   String
+  approver_id String
+  action      String
+  comment     String?
+  created_at  DateTime @default(now())
+
+  approver User       @relation(fields: [approver_id], references: [id])
+  permit   permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+}
+
+model ConfinedSpaceEntry {
+  id          String    @id @default(uuid())
+  permit_id   String
+  worker_name String
+  role        String
+  time_in     DateTime  @default(now())
+  time_out    DateTime?
+  status      String    @default("INSIDE")
+
+  permit permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// 🎓 MODULE: ระบบอบรม & ใบรับรอง
+// ==========================================
 model Certificate {
   id          String   @id @default(uuid())
   user_id     String
@@ -45,25 +173,22 @@ model Course {
   id            String           @id @default(uuid())
   title         String
   description   String?
-  video_url     String?  // มีอยู่แล้ว
-  passing_score Int              @default(80) // มีอยู่แล้ว
-  thumbnail     String?  // ลิงก์รูปปกคลิป
-  duration      String?  // ความยาวคลิป เช่น "45 นาที"
+  video_url     String?
+  passing_score Int              @default(80)
+  thumbnail     String?
+  duration      String?
   created_at    DateTime         @default(now())
   records       TrainingRecord[]
   questions     ExamQuestion[]
 }
 
-// 🟢 ตารางเก็บข้อสอบ
 model ExamQuestion {
   id         String   @id @default(uuid())
   course_id  String
   course     Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
-  
-  question   String   // คำถาม
-  choices    Json     // ตัวเลือก ก,ข,ค,ง (เก็บเป็น Array)
-  answer     String   // คำตอบที่ถูกต้อง
-  
+  question   String
+  choices    Json
+  answer     String
   created_at DateTime @default(now())
 }
 
@@ -78,6 +203,9 @@ model TrainingRecord {
   user         User     @relation(fields: [user_id], references: [id])
 }
 
+// ==========================================
+// ⚠️ MODULE: ระบบแจ้งจุดเสี่ยง (Incident Report)
+// ==========================================
 model IncidentReport {
   id          String   @id @default(uuid())
   reporter_id String
@@ -92,13 +220,16 @@ model IncidentReport {
   reporter    User     @relation(fields: [reporter_id], references: [id])
 }
 
+// ==========================================
+// 🌟 MODULE: ระบบตรวจอุปกรณ์ (Equipment)
+// ==========================================
 model Equipment {
-  id       String                   @id @default(uuid())
-  qr_code  String                   @unique
-  name     String
-  type     String
-  status   String                   @default("NORMAL")
-  logs     EquipmentInspectionLog[]
+  id      String                   @id @default(uuid())
+  qr_code String                   @unique
+  name    String
+  type    String
+  status  String                   @default("NORMAL")
+  logs    EquipmentInspectionLog[]
 }
 
 model EquipmentInspectionLog {
@@ -112,120 +243,25 @@ model EquipmentInspectionLog {
   inspector    User      @relation(fields: [inspector_id], references: [id])
 }
 
-model Permit {
-  id                  String               @id @default(uuid())
-  permit_number       String               @unique
-  title               String
-  description         String?
-  permit_type         String
-  status              String               @default("PENDING_AREA_OWNER")
-  location_detail     String
-  start_time          DateTime
-  end_time            DateTime
-  created_at          DateTime             @default(now())
-  updated_at          DateTime             @updatedAt
-  applicant_id        String
-  gas_tester_name     String?
-  standby_person_name String?
-  communication_equip String?
-  isolation_checklist Json?
-  approval_logs       ApprovalLog[]
-  confined_entries    ConfinedSpaceEntry[]
-  applicant           User                 @relation(fields: [applicant_id], references: [id])
-  attachments         PermitAttachment[]
-  gas_logs            gas_logs[]
-  extension_reason    String?
-
-  // ==========================================
-  // 🟢 [NEW] เพิ่มฟิลด์ใหม่สำหรับรองรับกฎหมาย Confined Space และ LOTO
-  // ==========================================
-  supervisor_name      String?   // ผู้ควบคุมงาน (บังคับมีในที่อับอากาศ)
-  rescue_plan_url      String?   // ไฟล์แนบแผนกู้ภัยฉุกเฉิน
-  is_med_cert_verified Boolean   @default(false) // ยืนยันว่าตรวจใบรับรองแพทย์ Fit for work แล้ว
-  is_loto_required     Boolean   @default(false) // ระบุว่างานนี้ต้องตัดแยกพลังงาน (LOTO) หรือไม่?
-  loto_records         LotoRecord[] // เชื่อมความสัมพันธ์ไปที่ตารางเก็บจุดตัดแยก LOTO
-}
-
 // ==========================================
-// 🔴 [NEW] สร้างตารางใหม่ สำหรับเก็บประวัติการตัดแยกพลังงาน (LOTO)
+// 👁️ MODULE: BBS Observation
 // ==========================================
-model LotoRecord {
-  id              String   @id @default(uuid())
-  permit_id       String
-  permit          Permit   @relation(fields: [permit_id], references: [id], onDelete: Cascade)
-  
-  isolation_point String   // จุดตัดแยกพลังงาน (เช่น วาล์ว V-101, เบรกเกอร์ MDB-02)
-  energy_type     String   // ประเภทพลังงาน (เช่น ELECTRICAL, MECHANICAL, CHEMICAL, PNEUMATIC)
-  lock_number     String   // หมายเลขแม่กุญแจ (Personal Lock)
-  
-  is_verified     Boolean  @default(false) // ตรวจสอบสถานะ Zero Energy (พลังงานเป็นศูนย์) หรือยัง?
-  verified_by     String?  // ชื่อผู้ตรวจสอบ
-  created_at      DateTime @default(now())
-}
-
-model ApprovalLog {
-  id          String   @id @default(uuid())
-  permit_id   String
-  approver_id String
-  action      String
-  comment     String?
-  created_at  DateTime @default(now())
-  approver    User     @relation(fields: [approver_id], references: [id])
-  permit      Permit   @relation(fields: [permit_id], references: [id])
-}
-
-model PermitAttachment {
-  id           String   @id @default(uuid())
-  permit_id    String
-  file_name    String
-  file_type    String
-  storage_path String
-  public_url   String
-  uploaded_at  DateTime @default(now())
-  permit       Permit   @relation(fields: [permit_id], references: [id])
-}
-
 model BbsObservation {
-  id            String        @id @default(uuid())
-  date          DateTime      @default(now())
-  location      String
+  id             String        @id @default(uuid())
+  date           DateTime      @default(now())
+  location       String
   observed_group ObservedGroup @default(EMPLOYEE)
   behavior_type  BehaviorType
-  category      BbsCategory
-  action_taken  ActionTaken
-  description   String
-  root_cause    RootCause?
-  suggestion    String?
-  photos        String[]
-  observer_id   String
-  created_at    DateTime      @default(now())
-  updated_at    DateTime      @updatedAt
-  observer      User          @relation(fields: [observer_id], references: [id])
-}
-
-model ConfinedSpaceEntry {
-  id          String    @id @default(uuid())
-  permit_id   String
-  worker_name String
-  role        String
-  time_in     DateTime  @default(now())
-  time_out    DateTime?
-  status      String    @default("INSIDE")
-  permit      Permit    @relation(fields: [permit_id], references: [id])
-}
-
-model gas_logs {
-  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  permit_id        String?
-  tester_id        String?
-  o2_level         Decimal?  @db.Decimal
-  lel_level        Decimal?  @db.Decimal
-  co_level         Decimal?  @db.Decimal
-  h2s_level        Decimal?  @db.Decimal
-  safety_talk_done Boolean?  @default(false)
-  recorded_at      DateTime? @default(now()) @db.Timestamptz(6)
-  permit           Permit?   @relation(fields: [permit_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  tester           User?     @relation(fields: [tester_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  category       BbsCategory
+  action_taken   ActionTaken
+  description    String
+  root_cause     RootCause?
+  suggestion     String?
+  photos         String[]
+  observer_id    String
+  created_at     DateTime      @default(now())
+  updated_at     DateTime      @updatedAt
+  observer       User          @relation(fields: [observer_id], references: [id])
 }
 
 enum ObservedGroup {
