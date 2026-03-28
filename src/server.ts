@@ -236,39 +236,53 @@ fastify.get('/permits', async (request, reply) => {
   }
 });
 
+// 🚀 ========================================================
+// 🟢 [แก้ไข] ปรับให้รับข้อมูลครบ 100% ไม่มีกั๊ก
+// ========================================================
 fastify.post('/permits', async (request, reply) => {
   const body = request.body as any;
   try {
     const validTypes = ['COLD_WORK', 'HOT_WORK', 'CONFINED_SPACE', 'WORKING_AT_HEIGHT', 'EXCAVATION', 'ELECTRICAL'];
     const finalType = validTypes.includes(body.permit_type) ? body.permit_type : 'COLD_WORK';
-    const safeTitle = body.title ? String(body.title).substring(0, 190) : 'ไม่มีหัวข้อ';
-    const safeLocation = body.location_detail ? String(body.location_detail).substring(0, 190) : 'ไม่ระบุพื้นที่';
+    
+    // เอา substring ออก เพื่อรับชื่อและสถานที่แบบเต็มๆ ไม่โดนตัด
+    const safeTitle = body.title || 'ไม่มีหัวข้อ';
+    const safeLocation = body.location_detail || 'ไม่ระบุพื้นที่';
     
     const typePrefix = finalType.substring(0, 2).toUpperCase(); 
     const permitNo = `${typePrefix}-${new Date().getFullYear()}${new Date().getMonth()+1}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    // 🟢 [เกราะป้องกัน 1] ถ้าส่งวันที่มาแหว่งๆ ให้ใส่วันที่ปัจจุบันแทน ป้องกัน Database พัง
     const safeStartTime = body.start_time ? new Date(body.start_time) : new Date();
-    const safeEndTime = body.end_time ? new Date(body.end_time) : new Date(Date.now() + 2 * 60 * 60 * 1000); // บวกไป 2 ชม.
+    const safeEndTime = body.end_time ? new Date(body.end_time) : new Date(Date.now() + 2 * 60 * 60 * 1000);
 
     const newPermit = await prisma.permits_v2.create({
       data: {
         permit_number: permitNo,
-        title: safeTitle, description: body.description, permit_type: finalType, status: 'PENDING_AREA_OWNER', location_detail: safeLocation,
+        title: safeTitle, 
+        description: body.description, 
+        permit_type: finalType, 
+        status: 'PENDING_AREA_OWNER', 
+        location_detail: safeLocation,
         start_time: safeStartTime, 
         end_time: safeEndTime, 
-        applicant_id: body.applicant_id || null, // ยอมรับ null ได้
-        applicant_phone: body.applicant_phone,
-        contractor_company: body.contractor_company,
-        contractor_supervisor: body.contractor_supervisor,
-        project_manager: body.project_manager,
-        work_sub_type: body.work_sub_type || [],
-        tools_equipment: body.tools_equipment || [],
-        safety_measures: body.safety_measures || [],
-        ppe_required: body.ppe_required || ['HARD_HAT', 'SAFETY_SHOES'],
-        workers: {
-          create: body.workers?.map((name: string) => ({ worker_name: name })) || []
-        }
+        applicant_id: body.applicant_id || null,
+        
+        // 🟢 ข้อมูลผู้รับเหมา (รับมาตรงๆ)
+        applicant_phone: body.applicant_phone || null,
+        contractor_company: body.contractor_company || null,
+        contractor_supervisor: body.contractor_supervisor || null,
+        project_manager: body.project_manager || null,
+        
+        // 🟢 ข้อมูล JSON (รับมาตรงๆ ไม่มียัด Default เองแล้ว)
+        work_sub_type: body.work_sub_type || null,
+        tools_equipment: body.tools_equipment || null,
+        safety_measures: body.safety_measures || null,
+        ppe_required: body.ppe_required || null,
+        
+        // 🟢 รายชื่อคนงาน (เช็คก่อนว่ามีให้ Map ไหม)
+        workers: body.workers && body.workers.length > 0 ? {
+          create: body.workers.map((name: string) => ({ worker_name: name }))
+        } : undefined
       }
     });
 
@@ -277,13 +291,13 @@ fastify.post('/permits', async (request, reply) => {
       await prisma.permit_hazard_details.create({
         data: {
           permit_id: newPermit.id,
-          supervisor_name: body.supervisor_name,
-          gas_tester_name: body.gas_tester_name,
-          standby_person_name: body.standby_person_name,
-          rescuer_name: body.rescuer_name,
-          communication_method: body.communication_method,
+          supervisor_name: body.supervisor_name || null,
+          gas_tester_name: body.gas_tester_name || null,
+          standby_person_name: body.standby_person_name || null,
+          rescuer_name: body.rescuer_name || null,
+          communication_method: body.communication_method || null,
           height_level: body.height_level ? parseFloat(body.height_level) : null,
-          rescue_plan_url: body.rescue_plan_url,
+          rescue_plan_url: body.rescue_plan_url || null,
           is_med_cert_verified: body.is_med_cert_verified || false,
           is_loto_required: body.is_loto_required || false
         }
@@ -292,17 +306,27 @@ fastify.post('/permits', async (request, reply) => {
 
     if (body.is_loto_required && body.loto_isolation_point) {
       await prisma.loto_records_v2.create({
-        data: { permit_id: newPermit.id, isolation_point: body.loto_isolation_point, energy_type: body.loto_energy_type || 'UNKNOWN', lock_number: body.loto_lock_number || '-' }
+        data: { 
+          permit_id: newPermit.id, 
+          isolation_point: body.loto_isolation_point, 
+          energy_type: body.loto_energy_type || 'UNKNOWN', 
+          lock_number: body.loto_lock_number || '-' 
+        }
       });
     }
 
     if (body.attachment_url) {
       await prisma.permitAttachment.create({
-        data: { permit_id: newPermit.id, file_name: body.attachment_name || 'Document', file_type: 'FILE', storage_path: 'supa', public_url: body.attachment_url }
+        data: { 
+          permit_id: newPermit.id, 
+          file_name: body.attachment_name || 'Document', 
+          file_type: 'FILE', 
+          storage_path: 'supa', 
+          public_url: body.attachment_url 
+        }
       });
     }
 
-    // 🟢 [เกราะป้องกัน 2] ค้นหา User แบบปลอดภัย
     const applicant = body.applicant_id ? await prisma.user.findUnique({ where: { id: body.applicant_id } }) : null;
     
     const areaOwners = await prisma.user.findMany({ where: { role: 'AREA_OWNER', line_id: { not: null } } });
