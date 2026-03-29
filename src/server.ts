@@ -9,11 +9,13 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 
 const fastify = Fastify({ logger: true });
 
+// ปลดล็อก CORS
 fastify.register(cors, { 
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 });
 
+// 🟢 ลงทะเบียน JWT
 fastify.register(fastifyJwt, { 
   secret: 'super-secret-safetyos-mtt-2026-key!' 
 });
@@ -103,7 +105,7 @@ fastify.get('/', async (request, reply) => {
 });
 
 // ==========================================
-// 👤 API ผู้ใช้งานและการ Login (แจก Token)
+// 👤 API ผู้ใช้งานและการ Login
 // ==========================================
 fastify.post('/login/line', async (request: any, reply) => {
   const { line_id, picture_url } = request.body;
@@ -117,7 +119,6 @@ fastify.post('/login/line', async (request: any, reply) => {
     }
 
     const token = fastify.jwt.sign({ id: user.id, role: user.role, name: user.full_name });
-    // 🟢 เปลี่ยนมาใช้ reply.send แทน return ธรรมดา
     return reply.send({ message: 'เข้าสู่ระบบอัตโนมัติสำเร็จ', user, token }); 
   } catch (error) {
     return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในระบบเซิร์ฟเวอร์' });
@@ -139,7 +140,6 @@ fastify.post('/login', async (request: any, reply) => {
     }
 
     const token = fastify.jwt.sign({ id: user.id, role: user.role, name: user.full_name });
-    // 🟢 เปลี่ยนมาใช้ reply.send แทน return ธรรมดา
     return reply.send({ message: 'เข้าสู่ระบบสำเร็จ', user, token }); 
   } catch (error) {
     return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในระบบเซิร์ฟเวอร์' });
@@ -151,23 +151,32 @@ fastify.get('/users', async (request, reply) => {
 });
 
 // ==========================================
-// 📄 API จัดการ Work Permit
+// 📄 API จัดการ Work Permit (อัปเกรด Pagination 🚀)
 // ==========================================
-fastify.get('/permits', async (request, reply) => {
+fastify.get('/permits', async (request: any, reply) => {
   try {
-    const permits = await prisma.permits_v2.findMany({
-      include: { 
-        applicant: true, 
-        approval_logs: { include: { approver: true } }, 
-        gas_logs: true,
-        hazard_details: true,
-        attachments: true,
-        loto_records: true,
-        workers: true,
-        extensions: true
-      },
-      orderBy: { created_at: 'desc' }
-    });
+    const page = Number(request.query.page) || 1;
+    const limit = Number(request.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const [permits, total] = await Promise.all([
+      prisma.permits_v2.findMany({
+        skip: skip,
+        take: limit,
+        include: { 
+          applicant: true, 
+          approval_logs: { include: { approver: true } }, 
+          gas_logs: true,
+          hazard_details: true,
+          attachments: true,
+          loto_records: true,
+          workers: true,
+          extensions: true
+        },
+        orderBy: { created_at: 'desc' }
+      }),
+      prisma.permits_v2.count()
+    ]);
 
     const formattedData = permits.map(p => {
       const hazardInfo = p.hazard_details?.[0] || {};
@@ -176,13 +185,20 @@ fastify.get('/permits', async (request, reply) => {
       return { ...rest, ...hazardInfo, attached_file }; 
     });
 
-    return reply.send(formattedData);
+    return reply.send({
+      data: formattedData,
+      meta: {
+        total: total,
+        page: page,
+        limit: limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
   } catch (error: any) {
     return reply.status(500).send({ error: 'ดึงข้อมูลล้มเหลว' });
   }
 });
 
-// 🟢 สร้าง Permit ใหม่
 fastify.post('/permits', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
   const body = request.body as any;
   const decodedUser = request.user;
@@ -269,7 +285,7 @@ fastify.post('/permits', { preValidation: [(fastify as any).authenticate] }, asy
   }
 });
 
-// 🟢 อัปเดตสถานะ
+// 🟢 อัปเดตสถานะ + Phase 1 & 5: Interlocks (กันอนุมัติมั่ว & กันปิดงานมีคนติด)
 fastify.put('/permits/:id', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
   const { id } = request.params as { id: string };
   const body = request.body as any; 
@@ -283,6 +299,31 @@ fastify.put('/permits/:id', { preValidation: [(fastify as any).authenticate] }, 
       const isAlreadyProcessed = ['APPROVED', 'REJECTED', 'CLOSED', 'REVOKED'].includes(currentPermit.status);
       if (isAlreadyProcessed && body.action !== 'CLOSE' && body.action !== 'REVOKE') {
         throw new Error("ALREADY_PROCESSED");
+      }
+
+      // 🛡️ Phase 1 & 2: Pre-entry Gas Test Interlock (ล็อกห้ามอนุมัติ ถ้ายกเว้นไม่มีผลก๊าซ)
+      if (body.action === 'APPROVE') {
+        const requiresGasTest = currentPermit.permit_type === 'HOT_WORK' || currentPermit.permit_type === 'CONFINED_SPACE';
+        
+        if (requiresGasTest) {
+          const gasTestCount = await tx.permit_gas_logs.count({
+            where: { permit_id: id }
+          });
+          
+          if (gasTestCount === 0) {
+            throw new Error("NO_GAS_TEST_RECORD"); // โยน Error สั่งบล็อกการอนุมัติ!
+          }
+        }
+      }
+
+      // 🛡️ Phase 5: Headcount Interlock (ห้ามปิดงานถ้าคนไม่ออกมา)
+      if (body.action === 'CLOSE' && currentPermit.permit_type === 'CONFINED_SPACE') {
+        const peopleInside = await tx.confinedSpaceEntry.count({
+          where: { permit_id: id, status: 'INSIDE' }
+        });
+        if (peopleInside > 0) {
+          throw new Error("PEOPLE_STILL_INSIDE"); 
+        }
       }
 
       let updateData: any = { status: body.status };
@@ -320,6 +361,12 @@ fastify.put('/permits/:id', { preValidation: [(fastify as any).authenticate] }, 
     return reply.send(updatedPermit);
     
   } catch (error: any) { 
+    if (error.message === "NO_GAS_TEST_RECORD") {
+      return reply.status(403).send({ error: 'ไม่อนุญาตให้อนุมัติ! หน้างานต้องทำการตรวจวัดสภาพอากาศ (Gas Test) ให้ผ่านก่อน' });
+    }
+    if (error.message === "PEOPLE_STILL_INSIDE") {
+      return reply.status(400).send({ error: 'ห้ามปิดงานเด็ดขาด! ยังมีผู้ปฏิบัติงานติดอยู่ด้านในอับอากาศ' });
+    }
     if (error.message === "ALREADY_PROCESSED") {
       return reply.status(409).send({ error: 'เอกสารนี้ถูกดำเนินการไปแล้วโดยบุคคลอื่น กรุณารีเฟรชหน้าจอ' });
     }
@@ -331,7 +378,27 @@ fastify.put('/permits/:id', { preValidation: [(fastify as any).authenticate] }, 
   }
 });
 
-// 🟢 ขอต่ออายุใบอนุญาต (Extend Permit)
+// 📸 Phase 3: บันทึกภาพหลักฐาน Toolbox Talk ก่อนเริ่มงาน
+fastify.post('/permits/:id/toolbox-talk', async (request: any, reply) => {
+  const { id } = request.params as { id: string };
+  const { image_url } = request.body as any;
+  try {
+    await prisma.permitAttachment.create({
+      data: {
+        permit_id: id,
+        file_name: 'Toolbox Talk Evidence',
+        file_type: 'TOOLBOX_TALK', // 🟢 ตั้งชื่อให้แยกจากไฟล์แนบแรก
+        storage_path: 'supa',
+        public_url: image_url
+      }
+    });
+    return reply.send({ message: 'บันทึกภาพ Toolbox Talk สำเร็จ' });
+  } catch (error) {
+    return reply.status(500).send({ error: 'ไม่สามารถบันทึกภาพได้' });
+  }
+});
+
+// ⏳ ต่อเวลา Permit
 fastify.put('/permits/:id/extend', async (request, reply) => {
   const { id } = request.params as { id: string };
   const { new_end_time, reason, requested_by } = request.body as any;
@@ -357,16 +424,36 @@ fastify.put('/permits/:id/extend', async (request, reply) => {
   } catch (error) { return reply.status(500).send({ error: 'ไม่สามารถขยายเวลาได้' }); }
 });
 
-// ==========================================
-// 💨 API ข้อมูลสภาพอากาศ (Gas Logs)
-// ==========================================
+// 💨 API ข้อมูลสภาพอากาศ + Phase 4: Auto-Evacuation (ระบบอพยพอัตโนมัติ)
 fastify.post('/gas-logs', async (request, reply) => {
   const body = request.body as any;
   try {
     const tester = await prisma.user.findUnique({ where: { id: body.tester_id } });
-    const newLog = await prisma.permit_gas_logs.create({ data: { permit_id: body.permit_id, inspector_name: tester?.full_name || 'ผู้ตรวจสอบ', o2_level: body.o2_level, lel_level: body.lel_level, co_level: body.co_level, h2s_level: body.h2s_level } });
-    return reply.send({ message: 'บันทึกข้อมูลก๊าซสำเร็จ', data: newLog });
-  } catch (error: any) { return reply.status(500).send({ error: 'ไม่สามารถบันทึกข้อมูลก๊าซได้' }); }
+    
+    const newLog = await prisma.permit_gas_logs.create({ 
+      data: { permit_id: body.permit_id, inspector_name: tester?.full_name || 'ผู้ตรวจสอบ', o2_level: body.o2_level, lel_level: body.lel_level, co_level: body.co_level, h2s_level: body.h2s_level } 
+    });
+
+    const isDangerous = body.o2_level < 19.5 || body.o2_level > 23.5 || body.lel_level >= 10 || body.co_level >= 25 || body.h2s_level >= 10;
+    
+    if (isDangerous) {
+      const permit = await prisma.permits_v2.update({ 
+        where: { id: body.permit_id }, data: { status: 'REVOKED' }, include: { applicant: true }
+      });
+      await prisma.confinedSpaceEntry.updateMany({ 
+        where: { permit_id: body.permit_id, status: 'INSIDE' }, data: { status: 'OUTSIDE', time_out: new Date() } 
+      });
+
+      const flex = createPermitFlex("🚨 อพยพด่วน! ก๊าซพิษเกินมาตรฐาน", permit.permit_number, "❌ ถูกระงับงานฉุกเฉิน", permit.location_detail, permit.applicant?.full_name || '-', "#e11d48", `${WEB_APP_URL}?page=CONFINED_SPACE`, `O2:${body.o2_level}%, LEL:${body.lel_level}%, H2S:${body.h2s_level}, CO:${body.co_level}`);
+      prisma.user.findMany({ where: { role: { in: ['SAFETY_ENGINEER', 'AREA_OWNER'] }, line_id: { not: null } } })
+        .then(safetyTeam => notifyLineInBackground(safetyTeam, flex, LINE_TARGET_ID));
+    }
+
+    return reply.send({ message: 'บันทึกข้อมูลก๊าซสำเร็จ', data: newLog, isDangerous });
+
+  } catch (error: any) { 
+    return reply.status(500).send({ error: 'ไม่สามารถบันทึกข้อมูลก๊าซได้' }); 
+  }
 });
 
 fastify.get('/permits/:id/gas-logs', async (request, reply) => {
@@ -375,9 +462,6 @@ fastify.get('/permits/:id/gas-logs', async (request, reply) => {
   catch (error: any) { return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลก๊าซได้' }); }
 });
 
-// ==========================================
-// 🕳️ API งานที่อับอากาศ (Confined Space)
-// ==========================================
 fastify.get('/confined-space/active-permits', async (request, reply) => { return reply.send(await prisma.permits_v2.findMany({ where: { permit_type: 'CONFINED_SPACE', status: 'APPROVED' }, orderBy: { created_at: 'desc' } })); });
 fastify.get('/confined-space/:permit_id/entries', async (request, reply) => { return reply.send(await prisma.confinedSpaceEntry.findMany({ where: { permit_id: (request.params as any).permit_id }, orderBy: { time_in: 'desc' } })); });
 fastify.post('/confined-space/in', async (request, reply) => { try { return reply.send(await prisma.confinedSpaceEntry.create({ data: request.body as any })); } catch (error) { return reply.status(500).send({ error: 'Check-in Error' }); } });
@@ -390,9 +474,6 @@ fastify.post('/confined-space/evacuate', async (request, reply) => {
   } catch (error) { return reply.status(500).send({ error: 'Evacuate Error' }); }
 });
 
-// ==========================================
-// 👁️ API สังเกตการณ์ (BBS) & จุดเสี่ยง (Incidents)
-// ==========================================
 fastify.get('/bbs', async (request, reply) => reply.send(await prisma.bbsObservation.findMany({ include: { observer: true }, orderBy: { created_at: 'desc' } })));
 fastify.post('/bbs', async (req: any, reply) => reply.send(await prisma.bbsObservation.create({ data: { ...req.body, date: req.body.date ? new Date(req.body.date) : new Date() } })));
 
@@ -400,28 +481,54 @@ fastify.get('/incidents', async (request, reply) => reply.send(await prisma.inci
 fastify.post('/incidents', async (req: any, reply) => reply.send(await prisma.incidentReport.create({ data: { ...req.body, status: 'OPEN' } })));
 fastify.put('/incidents/:id/status', async (req: any, reply) => reply.send(await prisma.incidentReport.update({ where: { id: req.params.id }, data: { status: req.body.status } })));
 
-// ==========================================
-// 🧰 API อุปกรณ์ (Equipment)
-// ==========================================
 fastify.get('/equipment/:qr', async (req: any, reply) => reply.send(await prisma.equipment.findUnique({ where: { qr_code: req.params.qr }, include: { logs: { include: { inspector: true } } } })));
 fastify.put('/equipment/:id/inspect', async (req: any, reply) => reply.send(await prisma.equipment.update({ where: { id: req.params.id }, data: { status: req.body.status } })));
 
 // ==========================================
-// 📊 API Dashboard
+// 📊 API Dashboard (อัปเกรดให้ถึกทน กัน Error 500)
 // ==========================================
 fastify.get('/dashboard', async (request, reply) => {
-  const [totalPermits, pendingPermits, openIncidents, defectiveEquip, permitGroups, recentIncidents] = await Promise.all([
-    prisma.permits_v2.count(), prisma.permits_v2.count({ where: { status: { startsWith: 'PENDING' } } }),
-    prisma.incidentReport.count({ where: { status: 'OPEN' } }), prisma.equipment.count({ where: { status: 'DEFECTIVE' } }),
-    prisma.permits_v2.groupBy({ by: ['permit_type'], _count: { permit_type: true } }),
-    prisma.incidentReport.findMany({ take: 3, orderBy: { created_at: 'desc' }, include: { reporter: true } })
-  ]);
-  return reply.send({ stats: { totalPermits, pendingPermits, openIncidents, defectiveEquip }, permitGroups, recentIncidents });
+  try {
+    const [totalPermits, pendingPermits, openIncidents, defectiveEquip, permitGroupsRaw, recentIncidents] = await Promise.all([
+      prisma.permits_v2.count(), 
+      prisma.permits_v2.count({ where: { status: { startsWith: 'PENDING' } } }),
+      prisma.incidentReport.count({ where: { status: 'OPEN' } }), 
+      prisma.equipment.count({ where: { status: 'DEFECTIVE' } }),
+      // 🟢 ดึงข้อมูลมานับเองแบบปลอดภัยกว่าใช้ groupBy เพียวๆ
+      prisma.permits_v2.findMany({
+        select: { permit_type: true }
+      }),
+      prisma.incidentReport.findMany({ take: 3, orderBy: { created_at: 'desc' }, include: { reporter: true } })
+    ]);
+
+    // 🟢 จับกลุ่มข้อมูลเองในโค้ด ป้องกันบั๊กจาก Prisma
+    const groupedTypes = permitGroupsRaw.reduce((acc: any, permit: any) => {
+      const type = permit.permit_type || 'COLD_WORK';
+      if (!acc[type]) acc[type] = 0;
+      acc[type]++;
+      return acc;
+    }, {});
+
+    const permitGroups = Object.keys(groupedTypes).map(key => ({
+      permit_type: key,
+      _count: { permit_type: groupedTypes[key] }
+    }));
+
+    return reply.send({ 
+      stats: { totalPermits, pendingPermits, openIncidents, defectiveEquip }, 
+      permitGroups, 
+      recentIncidents 
+    });
+  } catch (error: any) {
+    console.error("🚨 Dashboard Data Error:", error);
+    // ส่งข้อมูลเปล่ากลับไปดีกว่าปล่อยให้เว็บพัง
+    return reply.send({
+      stats: { totalPermits: 0, pendingPermits: 0, openIncidents: 0, defectiveEquip: 0 },
+      permitGroups: [], recentIncidents: []
+    });
+  }
 });
 
-// ==========================================
-// 🚀 Start Server
-// ==========================================
 const start = async () => {
   try {
     const PORT = Number(process.env.PORT) || 3000;
