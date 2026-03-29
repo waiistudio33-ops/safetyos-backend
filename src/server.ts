@@ -462,7 +462,17 @@ fastify.get('/permits/:id/gas-logs', async (request, reply) => {
   catch (error: any) { return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลก๊าซได้' }); }
 });
 
-fastify.get('/confined-space/active-permits', async (request, reply) => { return reply.send(await prisma.permits_v2.findMany({ where: { permit_type: 'CONFINED_SPACE', status: 'APPROVED' }, orderBy: { created_at: 'desc' } })); });
+// 🟢 อัปเกรด: ดึงข้อมูลการวัดก๊าซครั้งล่าสุด (1 รายการ) ติดไปให้กระดานด้วย เพื่อเอาไปจับเวลา
+fastify.get('/confined-space/active-permits', async (request, reply) => { 
+  return reply.send(await prisma.permits_v2.findMany({ 
+    where: { permit_type: 'CONFINED_SPACE', status: 'APPROVED' }, 
+    include: { 
+      workers: true,
+      gas_logs: { orderBy: { recorded_at: 'desc' }, take: 1 } // ดึงข้อมูลก๊าซล่าสุด
+    }, 
+    orderBy: { created_at: 'desc' } 
+  })); 
+});
 fastify.get('/confined-space/:permit_id/entries', async (request, reply) => { return reply.send(await prisma.confinedSpaceEntry.findMany({ where: { permit_id: (request.params as any).permit_id }, orderBy: { time_in: 'desc' } })); });
 fastify.post('/confined-space/in', async (request, reply) => { try { return reply.send(await prisma.confinedSpaceEntry.create({ data: request.body as any })); } catch (error) { return reply.status(500).send({ error: 'Check-in Error' }); } });
 fastify.put('/confined-space/out/:id', async (request, reply) => { try { return reply.send(await prisma.confinedSpaceEntry.update({ where: { id: (request.params as any).id }, data: { status: 'OUTSIDE', time_out: new Date() } })); } catch (error) { return reply.status(500).send({ error: 'Check-out Error' }); } });
