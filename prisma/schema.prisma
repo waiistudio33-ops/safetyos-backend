@@ -194,14 +194,14 @@ model ApprovalLog {
 }
 
 model ConfinedSpaceEntry {
-  id          String    @id @default(uuid())
-  permit_id   String
-  worker_name String
-  role        String
-  time_in     DateTime  @default(now())
-  time_out    DateTime?
-  status      String    @default("INSIDE")
-
+  id           String   @id @default(uuid())
+  permit_id    String
+  worker_name  String
+  time_in      DateTime
+  time_out     DateTime?
+  status       String
+  role         String?  // 🟢 เติมบรรทัดนี้เข้าไปครับ (เครื่องหมาย ? คือยอมให้เป็นค่าว่างได้)
+  
   permit permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
 }
 
