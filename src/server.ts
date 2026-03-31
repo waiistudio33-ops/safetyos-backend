@@ -154,14 +154,15 @@ fastify.get('/users', async (request, reply) => {
 fastify.put('/users/:id/profile', async (request: any, reply) => {
   try {
     const { id } = request.params;
-    const { department, phone, email } = request.body;
+    const { department, phone, email, profile_url } = request.body;
 
     const updatedUser = await prisma.user.update({
       where: { id: id },
       data: {
         department: department,
-        phone: phone,
-        email: email
+        phone: phone, // ตอนนี้ Prisma รู้จัก phone แล้ว
+        email: email, // ตอนนี้ Prisma รู้จัก email แล้ว
+        ...(profile_url && { profile_url: profile_url }) 
       }
     });
 

@@ -19,7 +19,8 @@ model User {
   username    String?  @unique
   password    String?
   line_id     String?  @unique
-
+  email       String?
+  phone       String?
   approvals        ApprovalLog[]
   bbs_observations BbsObservation[]
   certificates     Certificate[]
