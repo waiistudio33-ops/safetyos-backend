@@ -9,13 +9,13 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 
 const fastify = Fastify({ logger: true });
 
-// ปลดล็อก CORS
+// 🔓 ปลดล็อก CORS
 fastify.register(cors, { 
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 });
 
-// 🟢 ลงทะเบียน JWT
+// 🔐 ลงทะเบียน JWT
 fastify.register(fastifyJwt, { 
   secret: 'super-secret-safetyos-mtt-2026-key!' 
 });
@@ -150,7 +150,6 @@ fastify.get('/users', async (request, reply) => {
   return reply.send(await prisma.user.findMany());
 });
 
-// 🟢 NEW: API อัปเดตข้อมูลส่วนตัวของ User
 fastify.put('/users/:id/profile', async (request: any, reply) => {
   try {
     const { id } = request.params;
@@ -160,8 +159,8 @@ fastify.put('/users/:id/profile', async (request: any, reply) => {
       where: { id: id },
       data: {
         department: department,
-        phone: phone, // ตอนนี้ Prisma รู้จัก phone แล้ว
-        email: email, // ตอนนี้ Prisma รู้จัก email แล้ว
+        phone: phone, 
+        email: email, 
         ...(profile_url && { profile_url: profile_url }) 
       }
     });
@@ -514,17 +513,19 @@ fastify.put('/equipment/:id/inspect', async (req: any, reply) => reply.send(awai
 
 
 // ==========================================
-// 📊 API Dashboard 
+// 📊 API Dashboard (🔥 อัปเดตการนับจำนวน User N/A)
 // ==========================================
 fastify.get('/dashboard', async (request, reply) => {
   try {
-    const [totalPermits, pendingPermits, openIncidents, defectiveEquip, permitGroupsRaw, recentIncidents] = await Promise.all([
+    const [totalPermits, pendingPermits, openIncidents, defectiveEquip, permitGroupsRaw, recentIncidents, totalUsersCount] = await Promise.all([
       prisma.permits_v2.count(), 
       prisma.permits_v2.count({ where: { status: { startsWith: 'PENDING' } } }),
       prisma.incidentReport.count({ where: { status: 'OPEN' } }), 
       prisma.equipment.count({ where: { status: 'DEFECTIVE' } }),
       prisma.permits_v2.findMany({ select: { permit_type: true } }),
-      prisma.incidentReport.findMany({ take: 3, orderBy: { created_at: 'desc' }, include: { reporter: true } })
+      prisma.incidentReport.findMany({ take: 3, orderBy: { created_at: 'desc' }, include: { reporter: true } }),
+      // 🟢 นีงไง! นับจำนวนพนักงานทั้งหมดที่มีในฐานข้อมูล
+      prisma.user.count({ where: { status: 'ACTIVE' } }) 
     ]);
 
     const groupedTypes = permitGroupsRaw.reduce((acc: any, permit: any) => {
@@ -539,10 +540,20 @@ fastify.get('/dashboard', async (request, reply) => {
       _count: { permit_type: groupedTypes[key] }
     }));
 
-    return reply.send({ stats: { totalPermits, pendingPermits, openIncidents, defectiveEquip }, permitGroups, recentIncidents });
+    return reply.send({ 
+      stats: { 
+        totalPermits, 
+        pendingPermits, 
+        openIncidents, 
+        defectiveEquip,
+        totalUsers: totalUsersCount // 🟢 ส่งตัวเลขนี้กลับไปให้หน้าเว็บ
+      }, 
+      permitGroups, 
+      recentIncidents 
+    });
   } catch (error: any) {
     console.error("🚨 Dashboard Data Error:", error);
-    return reply.send({ stats: { totalPermits: 0, pendingPermits: 0, openIncidents: 0, defectiveEquip: 0 }, permitGroups: [], recentIncidents: [] });
+    return reply.send({ stats: { totalPermits: 0, pendingPermits: 0, openIncidents: 0, defectiveEquip: 0, totalUsers: 0 }, permitGroups: [], recentIncidents: [] });
   }
 });
 
