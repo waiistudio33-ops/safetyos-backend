@@ -153,7 +153,11 @@ fastify.get('/users', async (request, reply) => {
 fastify.put('/users/:id/profile', async (request: any, reply) => {
   try {
     const { id } = request.params;
-    const { department, phone, email, profile_url } = request.body;
+    
+    const { 
+      department, phone, email, profile_url, 
+      blood_group, medical_cond, emergency_contact 
+    } = request.body;
 
     const updatedUser = await prisma.user.update({
       where: { id: id },
@@ -161,7 +165,10 @@ fastify.put('/users/:id/profile', async (request: any, reply) => {
         department: department,
         phone: phone, 
         email: email, 
-        ...(profile_url && { profile_url: profile_url }) 
+        ...(profile_url && { profile_url: profile_url }),
+        ...(blood_group && { blood_group: blood_group }),
+        ...(medical_cond && { medical_cond: medical_cond }),
+        ...(emergency_contact && { emergency_contact: emergency_contact })
       }
     });
 
@@ -172,6 +179,38 @@ fastify.put('/users/:id/profile', async (request: any, reply) => {
   }
 });
 
+fastify.get('/users/me/timeline', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
+  try {
+    const userId = request.user.id; 
+
+    const [myPermits, myBbs] = await Promise.all([
+      prisma.permits_v2.findMany({
+        where: { applicant_id: userId },
+        orderBy: { created_at: 'desc' },
+        take: 20 
+      }),
+      prisma.bbsObservation.findMany({
+        where: { observer_id: userId },
+        orderBy: { created_at: 'desc' },
+        take: 20
+      })
+    ]);
+
+    return reply.send({
+      success: true,
+      data: {
+        permits: myPermits,
+        bbs: myBbs,
+        certs: [], 
+        elearning: [] 
+      }
+    });
+
+  } catch (error) {
+    console.error("🚨 Timeline Error:", error);
+    return reply.status(500).send({ success: false, error: 'ไม่สามารถดึงข้อมูลประวัติกิจกรรมได้' });
+  }
+});
 
 // ==========================================
 // 📄 API จัดการ Work Permit
@@ -432,7 +471,8 @@ fastify.post('/gas-logs', async (request: any, reply) => {
         o2_level: body.o2_level, 
         lel_level: body.lel_level, 
         co_level: body.co_level, 
-        h2s_level: body.h2s_level 
+        h2s_level: body.h2s_level,
+        safety_talk_done: body.safety_talk_done || false 
       } 
     });
 
@@ -502,18 +542,220 @@ fastify.post('/confined-space/evacuate', async (request: any, reply) => {
 // 🛠️ API อื่นๆ (BBS, Incident, Equipment)
 // ==========================================
 fastify.get('/bbs', async (request, reply) => reply.send(await prisma.bbsObservation.findMany({ include: { observer: true }, orderBy: { created_at: 'desc' } })));
-fastify.post('/bbs', async (req: any, reply) => reply.send(await prisma.bbsObservation.create({ data: { ...req.body, date: req.body.date ? new Date(req.body.date) : new Date() } })));
+fastify.post('/bbs', async (req: any, reply) => {
+  try {
+    const data = req.body;
+    if (!data.observer_id) data.observer_id = req.user?.id || req.body.observer_id; 
 
-fastify.get('/incidents', async (request, reply) => reply.send(await prisma.incidentReport.findMany({ include: { reporter: true }, orderBy: { created_at: 'desc' } })));
-fastify.post('/incidents', async (req: any, reply) => reply.send(await prisma.incidentReport.create({ data: { ...req.body, status: 'OPEN' } })));
-fastify.put('/incidents/:id/status', async (req: any, reply) => reply.send(await prisma.incidentReport.update({ where: { id: req.params.id }, data: { status: req.body.status } })));
+    const newBbs = await prisma.bbsObservation.create({
+      data: {
+        date: data.date ? new Date(data.date) : new Date(),
+        location: data.location || "ไม่ระบุ",
+        behavior_type: data.behavior_type || "SAFE",
+        category: data.category || "OTHER",
+        description: data.description || "",
+        action_taken: data.action_taken || "PRAISED",
+        observer_id: data.observer_id,
+        photos: data.image_url ? [data.image_url] : [],
+        root_cause: data.root_cause || null,
+        suggestion: data.suggestion || null
+      }
+    });
 
-fastify.get('/equipment/:qr', async (req: any, reply) => reply.send(await prisma.equipment.findUnique({ where: { qr_code: req.params.qr }, include: { logs: { include: { inspector: true } } } })));
-fastify.put('/equipment/:id/inspect', async (req: any, reply) => reply.send(await prisma.equipment.update({ where: { id: req.params.id }, data: { status: req.body.status } })));
+    return reply.send(newBbs);
+  } catch (error: any) {
+    console.error("🚨 BBS Create Error:", error);
+    return reply.status(500).send({ error: 'บันทึกข้อมูลไม่สำเร็จ', details: error.message });
+  }
+});
+
+// 🟢 1. ดึงข้อมูล Incident
+fastify.get('/incidents', async (request, reply) => {
+  try {
+    const incidents = await prisma.incidentReport.findMany({
+      include: { reporter: { select: { full_name: true, profile_url: true } } }, 
+      orderBy: { created_at: 'desc' } 
+    });
+    return reply.send(incidents);
+  } catch (error) {
+    console.error(error);
+    return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลจุดเสี่ยงได้' });
+  }
+});
+
+// 🟢 2. แจ้ง Incident ใหม่
+fastify.post('/incidents', async (request: any, reply) => {
+  try {
+    const newIncident = await prisma.incidentReport.create({
+      data: {
+        reporter_id: request.body.reporter_id,
+        title: request.body.title,
+        description: request.body.description,
+        type: request.body.type,
+        lat: request.body.lat,
+        lng: request.body.lng,
+        image_url: request.body.image_url,
+        status: 'OPEN'
+      }
+    });
+
+    return reply.send(newIncident);
+  } catch (error) {
+    console.error(error);
+    return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในการบันทึกจุดเสี่ยง' });
+  }
+});
+
+// 🟢 3. อัปเดตสถานะ Incident
+fastify.put('/incidents/:id/status', async (request: any, reply) => {
+  try {
+    const { id } = request.params;
+    const { status } = request.body;
+
+    const updatedIncident = await prisma.incidentReport.update({
+      where: { id },
+      data: { status }
+    });
+
+    return reply.send(updatedIncident);
+  } catch (error) {
+    console.error(error);
+    return reply.status(500).send({ error: 'ไม่สามารถอัปเดตสถานะได้' });
+  }
+});
+
+fastify.get('/equipment/:qr', async (req: any, reply) => {
+  try {
+    const equipment = await prisma.equipment.findUnique({ 
+      where: { qr_code: req.params.qr }, 
+      include: { 
+        logs: { 
+          include: { inspector: true },
+          orderBy: { created_at: 'desc' } // 🟢 สำคัญ! สั่งให้เรียงอันใหม่ขึ้นก่อน
+        } 
+      } 
+    });
+    return reply.send(equipment);
+  } catch (error) {
+    return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลอุปกรณ์ได้' });
+  }
+});
+fastify.put('/equipment/:id/inspect', async (req: any, reply) => {
+  try {
+    const { id } = req.params;
+    const { status, inspector_id, inspector_name, details, photos } = req.body;
+
+    // 1. อัปเดตสถานะของอุปกรณ์
+    const updatedEquipment = await prisma.equipment.update({
+      where: { id: id },
+      data: { status: status }
+    });
+
+    // 2. สร้างประวัติการตรวจสอบ (Log) ลง Database
+    const newLog = await prisma.equipmentInspectionLog.create({
+      data: {
+        equipment_id: id,
+        inspector_id: inspector_id || 'user-001', // ถ้าไม่ได้ล็อกอินมา ให้ fallback เป็น user-001 กัน Error
+        inspector_name: inspector_name || 'ไม่ระบุชื่อ',
+        status: status,
+        details: details || '{}',
+        photos: photos ? JSON.parse(photos) : [] // แปลง String กลับเป็น JSON Array ก่อนบันทึก
+      }
+    });
+
+    return reply.send({ success: true, equipment: updatedEquipment, log: newLog });
+  } catch (error: any) {
+    console.error("🚨 Error saving equipment inspection:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถบันทึกข้อมูลการตรวจสอบได้', details: error.message });
+  }
+});
 
 
 // ==========================================
-// 📊 API Dashboard (🔥 อัปเดตการนับจำนวน User N/A)
+// 🎓 API ระบบใบรับรอง (Certificates)
+// ==========================================
+
+fastify.get('/certificates', async (request, reply) => {
+  try {
+    const certs = await prisma.certificate.findMany({
+      include: { user: { select: { full_name: true, department: true } } },
+      orderBy: { created_at: 'desc' }
+    });
+    return reply.send(certs);
+  } catch (error) {
+    console.error("🚨 Get Certificates Error:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลใบรับรองได้' });
+  }
+});
+
+fastify.get('/users/me/certificates', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
+  try {
+    const userId = request.user.id;
+    const myCerts = await prisma.certificate.findMany({
+      where: { user_id: userId },
+      orderBy: { issued_date: 'desc' }
+    });
+    return reply.send(myCerts);
+  } catch (error) {
+    console.error("🚨 Get My Certificates Error:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลใบรับรองของคุณได้' });
+  }
+});
+
+fastify.post('/certificates', async (request: any, reply) => {
+  try {
+    const { user_id, cert_name, file_url, issued_date, expiry_date, status } = request.body;
+
+    if (!user_id || !cert_name || !file_url || !issued_date || !expiry_date) {
+      return reply.status(400).send({ error: 'ข้อมูลไม่ครบถ้วน กรุณากรอกให้ครบ' });
+    }
+
+    const newCert = await prisma.certificate.create({
+      data: {
+        user_id, cert_name, file_url,
+        issued_date: new Date(issued_date),
+        expiry_date: new Date(expiry_date),
+        status: status || 'PENDING' // ✅ ต้องเป็น PENDING เพื่อรอ จป. ตรวจครับ
+      }
+    });
+
+    return reply.status(201).send(newCert);
+  } catch (error) {
+    console.error("🚨 Create Certificate Error:", error);
+    return reply.status(500).send({ error: 'เกิดข้อผิดพลาดในการบันทึกใบรับรอง' });
+  }
+});
+
+fastify.put('/certificates/:id/status', async (request: any, reply) => {
+  try {
+    const { id } = request.params;
+    const { status } = request.body;
+
+    const updatedCert = await prisma.certificate.update({
+      where: { id }, data: { status }
+    });
+
+    return reply.send(updatedCert);
+  } catch (error) {
+    console.error("🚨 Update Certificate Status Error:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถอัปเดตสถานะใบรับรองได้' });
+  }
+});
+
+fastify.delete('/certificates/:id', async (request: any, reply) => {
+  try {
+    const { id } = request.params;
+    await prisma.certificate.delete({ where: { id } });
+    return reply.send({ success: true, message: 'ลบใบรับรองเรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error("🚨 Delete Certificate Error:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถลบใบรับรองได้' });
+  }
+});
+
+
+// ==========================================
+// 📊 API Dashboard
 // ==========================================
 fastify.get('/dashboard', async (request, reply) => {
   try {
@@ -524,7 +766,6 @@ fastify.get('/dashboard', async (request, reply) => {
       prisma.equipment.count({ where: { status: 'DEFECTIVE' } }),
       prisma.permits_v2.findMany({ select: { permit_type: true } }),
       prisma.incidentReport.findMany({ take: 3, orderBy: { created_at: 'desc' }, include: { reporter: true } }),
-      // 🟢 นีงไง! นับจำนวนพนักงานทั้งหมดที่มีในฐานข้อมูล
       prisma.user.count({ where: { status: 'ACTIVE' } }) 
     ]);
 
@@ -546,7 +787,7 @@ fastify.get('/dashboard', async (request, reply) => {
         pendingPermits, 
         openIncidents, 
         defectiveEquip,
-        totalUsers: totalUsersCount // 🟢 ส่งตัวเลขนี้กลับไปให้หน้าเว็บ
+        totalUsers: totalUsersCount
       }, 
       permitGroups, 
       recentIncidents 
