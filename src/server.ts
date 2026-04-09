@@ -215,14 +215,20 @@ fastify.get('/users/me/timeline', { preValidation: [(fastify as any).authenticat
 // ==========================================
 // 📄 API จัดการ Work Permit
 // ==========================================
-fastify.get('/permits', async (request: any, reply) => {
+fastify.get('/permits', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
   try {
+    const user = request.user;
     const page = Number(request.query.page) || 1;
     const limit = Number(request.query.limit) || 10;
     const skip = (page - 1) * limit;
 
+    // 🔒 กรองสิทธิ์: เฉพาะ CONTRACTOR เท่านั้นที่เห็นแค่ของตัวเอง
+    const isRestricted = user.role === 'CONTRACTOR';
+    const whereClause = isRestricted ? { applicant_id: user.id } : {};
+
     const [permits, total] = await Promise.all([
       prisma.permits_v2.findMany({
+        where: whereClause,
         skip: skip,
         take: limit,
         include: { 
@@ -237,7 +243,7 @@ fastify.get('/permits', async (request: any, reply) => {
         },
         orderBy: { created_at: 'desc' }
       }),
-      prisma.permits_v2.count()
+      prisma.permits_v2.count({ where: whereClause })
     ]);
 
     const formattedData = permits.map(p => {
@@ -504,9 +510,16 @@ fastify.get('/permits/:id/gas-logs', async (request: any, reply) => {
   catch (error: any) { return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลก๊าซได้' }); }
 });
 
-fastify.get('/confined-space/active-permits', async (request, reply) => { 
+fastify.get('/confined-space/active-permits', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => { 
+  const user = request.user;
+  const isRestricted = user.role === 'CONTRACTOR';
+  
   return reply.send(await prisma.permits_v2.findMany({ 
-    where: { permit_type: 'CONFINED_SPACE', status: 'APPROVED' }, 
+    where: { 
+      permit_type: 'CONFINED_SPACE', 
+      status: 'APPROVED',
+      ...(isRestricted ? { applicant_id: user.id } : {}) // 🔒 กรองสิทธิ์
+    }, 
     include: { 
       workers: true,
       gas_logs: { orderBy: { recorded_at: 'desc' }, take: 1 } 
@@ -541,7 +554,18 @@ fastify.post('/confined-space/evacuate', async (request: any, reply) => {
 // ==========================================
 // 🛠️ API อื่นๆ (BBS, Incident, Equipment)
 // ==========================================
-fastify.get('/bbs', async (request, reply) => reply.send(await prisma.bbsObservation.findMany({ include: { observer: true }, orderBy: { created_at: 'desc' } })));
+fastify.get('/bbs', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
+  const user = request.user;
+  const isRestricted = user.role === 'CONTRACTOR';
+  const whereClause = isRestricted ? { observer_id: user.id } : {};
+
+  reply.send(await prisma.bbsObservation.findMany({ 
+    where: whereClause, // 🔒 กรองสิทธิ์
+    include: { observer: true }, 
+    orderBy: { created_at: 'desc' } 
+  }));
+});
+
 fastify.post('/bbs', async (req: any, reply) => {
   try {
     const data = req.body;
@@ -570,9 +594,14 @@ fastify.post('/bbs', async (req: any, reply) => {
 });
 
 // 🟢 1. ดึงข้อมูล Incident
-fastify.get('/incidents', async (request, reply) => {
+fastify.get('/incidents', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
   try {
+    const user = request.user;
+    const isRestricted = user.role === 'CONTRACTOR';
+    const whereClause = isRestricted ? { reporter_id: user.id } : {};
+
     const incidents = await prisma.incidentReport.findMany({
+      where: whereClause, // 🔒 กรองสิทธิ์
       include: { reporter: { select: { full_name: true, profile_url: true } } }, 
       orderBy: { created_at: 'desc' } 
     });
@@ -640,6 +669,7 @@ fastify.get('/equipment/:qr', async (req: any, reply) => {
     return reply.status(500).send({ error: 'ไม่สามารถดึงข้อมูลอุปกรณ์ได้' });
   }
 });
+
 fastify.put('/equipment/:id/inspect', async (req: any, reply) => {
   try {
     const { id } = req.params;
@@ -675,9 +705,14 @@ fastify.put('/equipment/:id/inspect', async (req: any, reply) => {
 // 🎓 API ระบบใบรับรอง (Certificates)
 // ==========================================
 
-fastify.get('/certificates', async (request, reply) => {
+fastify.get('/certificates', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
   try {
+    const user = request.user;
+    const isRestricted = user.role === 'CONTRACTOR';
+    const whereClause = isRestricted ? { user_id: user.id } : {};
+
     const certs = await prisma.certificate.findMany({
+      where: whereClause, // 🔒 กรองสิทธิ์
       include: { user: { select: { full_name: true, department: true } } },
       orderBy: { created_at: 'desc' }
     });
@@ -757,15 +792,23 @@ fastify.delete('/certificates/:id', async (request: any, reply) => {
 // ==========================================
 // 📊 API Dashboard
 // ==========================================
-fastify.get('/dashboard', async (request, reply) => {
+fastify.get('/dashboard', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
   try {
+    const user = request.user;
+    
+    // 🔒 กรองสิทธิ์: เฉพาะ CONTRACTOR เท่านั้นที่เห็นตัวเลขเฉพาะของตัวเอง
+    const isRestricted = user.role === 'CONTRACTOR';
+
+    const permitWhere = isRestricted ? { applicant_id: user.id } : {};
+    const incidentWhere = isRestricted ? { reporter_id: user.id } : {};
+
     const [totalPermits, pendingPermits, openIncidents, defectiveEquip, permitGroupsRaw, recentIncidents, totalUsersCount] = await Promise.all([
-      prisma.permits_v2.count(), 
-      prisma.permits_v2.count({ where: { status: { startsWith: 'PENDING' } } }),
-      prisma.incidentReport.count({ where: { status: 'OPEN' } }), 
-      prisma.equipment.count({ where: { status: 'DEFECTIVE' } }),
-      prisma.permits_v2.findMany({ select: { permit_type: true } }),
-      prisma.incidentReport.findMany({ take: 3, orderBy: { created_at: 'desc' }, include: { reporter: true } }),
+      prisma.permits_v2.count({ where: permitWhere }), 
+      prisma.permits_v2.count({ where: { ...permitWhere, status: { startsWith: 'PENDING' } } }),
+      prisma.incidentReport.count({ where: { ...incidentWhere, status: 'OPEN' } }), 
+      prisma.equipment.count({ where: { status: 'DEFECTIVE' } }), // 🟢 Equipment ให้ทุกคนเห็นของเสียรวม
+      prisma.permits_v2.findMany({ where: permitWhere, select: { permit_type: true } }),
+      prisma.incidentReport.findMany({ where: incidentWhere, take: 3, orderBy: { created_at: 'desc' }, include: { reporter: true } }),
       prisma.user.count({ where: { status: 'ACTIVE' } }) 
     ]);
 
