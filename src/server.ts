@@ -303,7 +303,46 @@ fastify.get('/certificates', { preValidation: [(fastify as any).authenticate] },
 fastify.get('/users/me/certificates', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
   try { return reply.send(await prisma.certificate.findMany({ where: { user_id: request.user.id }, orderBy: { issued_date: 'desc' } })); } catch (error) { return reply.status(500).send({ error: 'ดึงข้อมูลไม่ได้' }); }
 });
+// ==========================================
+// 🔍 API สำหรับ Verification (ค้นหาพนักงานด้วย ID หรือ Username/Employee ID)
+// ==========================================
+fastify.get('/users/verify/:identifier', async (request: any, reply) => {
+  try {
+    const { identifier } = request.params;
 
+    // ค้นหา User โดยเช็คจาก id, username หรือ employee_id
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: identifier },
+          { username: identifier },
+          // ถ้า database ของเฮียมี field employee_id ให้เอาคอมเมนต์บรรทัดล่างออกครับ
+          // { employee_id: identifier } 
+        ]
+      },
+      // เลือกส่งกลับไปเฉพาะข้อมูลที่จำเป็น ป้องกันข้อมูลส่วนตัวหลุด
+      select: {
+        id: true,
+        full_name: true,
+        department: true,
+        role: true,
+        profile_url: true,
+        blood_group: true,
+        medical_cond: true,
+        emergency_contact: true
+      }
+    });
+
+    if (!user) {
+      return reply.status(404).send({ error: 'ไม่พบข้อมูลพนักงาน' });
+    }
+
+    return reply.send(user);
+  } catch (error) {
+    console.error("Verification Error:", error);
+    return reply.status(500).send({ error: 'เซิร์ฟเวอร์ขัดข้อง' });
+  }
+});
 fastify.post('/certificates', async (request: any, reply) => {
   try {
     const { user_id, cert_name, file_url, issued_date, expiry_date, status } = request.body;
