@@ -33,21 +33,18 @@ fastify.decorate("authenticate", async function (request: any, reply: any) {
   catch (err) { reply.status(401).send({ error: 'ไม่ได้รับอนุญาต (Token ไม่ถูกต้องหรือหมดอายุ)' }); }
 });
 
-// 📧 ==========================================
-// ✉️ ตั้งค่า Nodemailer & ระบบ OTP
-// ==========================================
-// 📧 ตั้งค่า Nodemailer สำหรับรันบน Cloud (Render/Vercel)
+// 📧 ตั้งค่า Nodemailer แบบทะลวง Cloud (Render)
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 465,
-  secure: true, // บังคับใช้ SSL
+  port: 587,           // 🟢 ใช้ Port 587 ซึ่งเป็นมิตรกับ Cloud มากกว่า
+  secure: false,       // 🟢 ต้องเป็น false สำหรับ port 587
+  requireTLS: true,    // 🟢 บังคับเข้ารหัสความปลอดภัย
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    // ป้องกันปัญหา Certificate บนเซิร์ฟเวอร์ Cloud
-    rejectUnauthorized: false
+    rejectUnauthorized: false // 🟢 ป้องกันปัญหา Certificate บนเซิร์ฟเวอร์ Cloud
   }
 });
 
