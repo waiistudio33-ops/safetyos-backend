@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client'
 import fastifyJwt from '@fastify/jwt'; 
 import bcrypt from 'bcryptjs';
+import nodemailer from 'nodemailer'; // 🟢 เพิ่ม Import Nodemailer
 
 const globalForPrisma = global as unknown as { prisma: PrismaClient }
 export const prisma = globalForPrisma.prisma || new PrismaClient()
@@ -30,6 +31,20 @@ fastify.decorate("authenticate", async function (request: any, reply: any) {
   try { await request.jwtVerify(); } 
   catch (err) { reply.status(401).send({ error: 'ไม่ได้รับอนุญาต (Token ไม่ถูกต้องหรือหมดอายุ)' }); }
 });
+
+// 📧 ==========================================
+// ✉️ ตั้งค่า Nodemailer & ระบบ OTP
+// ==========================================
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER, // ใส่อีเมลในไฟล์ .env
+    pass: process.env.EMAIL_PASS  // ใส่รหัสผ่านแอป 16 ตัวในไฟล์ .env
+  }
+});
+
+// เก็บ OTP ใน Memory ชั่วคราว
+const otpStore = new Map<string, { code: string, expiresAt: number }>();
 
 // 🚀 ==========================================
 // 🔔 ตั้งค่า LINE Messaging API
@@ -72,8 +87,102 @@ const notifyLineInBackground = async (usersToNotify: any[], flexMessage: any, fa
 fastify.get('/', async (request, reply) => reply.send({ status: 'OK', message: 'Enterprise Safety Backend is Running Securely!' }));
 
 // ==========================================
-// 👤 API ผู้ใช้งานและการ Login
+// 👤 API ผู้ใช้งาน, การ Login และ Register
 // ==========================================
+
+// 🚀 API: ขอรหัส OTP ไปที่อีเมล
+fastify.post('/auth/request-otp', async (request: any, reply) => {
+  const { email } = request.body;
+  if (!email) return reply.status(400).send({ error: 'กรุณาระบุอีเมล' });
+
+  // เช็คก่อนว่าอีเมลนี้มีคนสมัครไปหรือยัง
+  const existingUser = await prisma.user.findFirst({ where: { OR: [{ email: email }, { username: email }] } });
+  if (existingUser) return reply.status(400).send({ error: 'อีเมลนี้ถูกใช้งานแล้ว กรุณาเข้าสู่ระบบ' });
+
+  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 นาที
+  otpStore.set(email, { code: otpCode, expiresAt });
+
+  const mailOptions = {
+    from: `"SafetyOS System" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: `รหัสยืนยัน SafetyOS: ${otpCode}`,
+    html: `
+      <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+        <h2 style="color: #2563eb;">ยืนยันการสมัครสมาชิก SafetyOS</h2>
+        <p>คุณได้ทำการขอรหัส OTP สำหรับสร้างบัญชีผู้ใช้ใหม่</p>
+        <div style="background: #f8fafc; padding: 20px; text-align: center; border-radius: 10px; margin: 20px 0;">
+          <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #1e293b;">${otpCode}</span>
+        </div>
+        <p style="color: #64748b; font-size: 12px;">รหัสนี้มีอายุ 5 นาที กรุณาอย่านำรหัสไปให้บุคคลอื่น</p>
+      </div>
+    `
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(`✅ OTP Sent to ${email}: ${otpCode}`);
+    return reply.send({ success: true, message: 'ส่งรหัส OTP เรียบร้อยแล้ว' });
+  } catch (error) {
+    console.error("❌ Email Error:", error);
+    return reply.status(500).send({ error: 'ระบบไม่สามารถส่งอีเมลได้ กรุณาติดต่อแอดมิน' });
+  }
+});
+
+// 🚀 API: ตรวจสอบรหัส OTP
+fastify.post('/auth/verify-otp', async (request: any, reply) => {
+  const { email, otp } = request.body;
+  const record = otpStore.get(email);
+
+  if (!record) return reply.status(400).send({ error: 'ไม่พบคำขอรหัส หรือรหัสหมดอายุแล้ว' });
+  if (Date.now() > record.expiresAt) {
+    otpStore.delete(email);
+    return reply.status(400).send({ error: 'รหัส OTP หมดอายุแล้ว' });
+  }
+  if (record.code !== otp) return reply.status(400).send({ error: 'รหัส OTP ไม่ถูกต้อง' });
+
+  // ลบรหัสออกเพื่อไม่ให้ใช้ซ้ำ
+  otpStore.delete(email);
+  return reply.send({ success: true, message: 'ยืนยันอีเมลสำเร็จ' });
+});
+
+// 🚀 API: สมัครสมาชิกใหม่ (Register)
+fastify.post('/register', async (request: any, reply) => {
+  const { full_name, employee_id, phone, password, email } = request.body;
+  
+  try {
+    // ตรวจสอบข้อมูลซ้ำ
+    const existingUser = await prisma.user.findFirst({
+      where: { OR: [{ email: email }, { username: email }, { employee_id: employee_id }] }
+    });
+    
+    if (existingUser) return reply.status(400).send({ error: 'อีเมลหรือรหัสพนักงานนี้มีในระบบแล้ว' });
+
+    // เข้ารหัส Password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // บันทึกลง Database
+    const newUser = await prisma.user.create({
+      data: {
+        full_name,
+        employee_id,
+        phone,
+        email,
+        username: email, // ใช้อีเมลเป็น Username สำหรับเข้าสู่ระบบ
+        password: hashedPassword,
+        role: 'CONTRACTOR', // ค่าเริ่มต้นให้เป็นผู้รับเหมาก่อน
+        status: 'ACTIVE'
+      }
+    });
+
+    return reply.send({ success: true, message: 'สร้างบัญชีผู้ใช้ใหม่สำเร็จ', user: { id: newUser.id, email: newUser.email } });
+  } catch (error) {
+    console.error("Register Error:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถสร้างบัญชีได้' });
+  }
+});
+
 fastify.post('/login/line', async (request: any, reply) => {
   const { line_id, picture_url } = request.body;
   try {
@@ -90,7 +199,8 @@ fastify.post('/login/line', async (request: any, reply) => {
 fastify.post('/login', async (request: any, reply) => {
   const { username, password, line_id, picture_url } = request.body;
   try {
-    let user = await prisma.user.findUnique({ where: { username: username } });
+    // ยอมให้ล็อกอินด้วย username หรือ email ได้
+    let user = await prisma.user.findFirst({ where: { OR: [{ username: username }, { email: username }] } });
     if (!user || !user.password) return reply.status(401).send({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง!' });
 
     const isHashMatch = await bcrypt.compare(password, user.password).catch(() => false);
@@ -126,6 +236,42 @@ fastify.get('/users/me/timeline', { preValidation: [(fastify as any).authenticat
     const [myPermits, myBbs] = await Promise.all([ prisma.permits_v2.findMany({ where: { applicant_id: userId }, orderBy: { created_at: 'desc' }, take: 20 }), prisma.bbsObservation.findMany({ where: { observer_id: userId }, orderBy: { created_at: 'desc' }, take: 20 }) ]);
     return reply.send({ success: true, data: { permits: myPermits, bbs: myBbs, certs: [], elearning: [] } });
   } catch (error) { return reply.status(500).send({ success: false, error: 'ดึงข้อมูลประวัติกิจกรรมล้มเหลว' }); }
+});
+
+// ==========================================
+// 🔍 API สำหรับ Verification (ค้นหาพนักงานด้วย ID หรือ Username/Employee ID)
+// ==========================================
+fastify.get('/users/verify/:identifier', async (request: any, reply) => {
+  try {
+    const { identifier } = request.params;
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: identifier },
+          { username: identifier },
+          { employee_id: identifier } 
+        ]
+      },
+      select: {
+        id: true,
+        full_name: true,
+        department: true,
+        role: true,
+        profile_url: true,
+        blood_group: true,
+        medical_cond: true,
+        emergency_contact: true
+      }
+    });
+
+    if (!user) {
+      return reply.status(404).send({ error: 'ไม่พบข้อมูลพนักงาน' });
+    }
+    return reply.send(user);
+  } catch (error) {
+    console.error("Verification Error:", error);
+    return reply.status(500).send({ error: 'เซิร์ฟเวอร์ขัดข้อง' });
+  }
 });
 
 // ==========================================
@@ -303,46 +449,7 @@ fastify.get('/certificates', { preValidation: [(fastify as any).authenticate] },
 fastify.get('/users/me/certificates', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
   try { return reply.send(await prisma.certificate.findMany({ where: { user_id: request.user.id }, orderBy: { issued_date: 'desc' } })); } catch (error) { return reply.status(500).send({ error: 'ดึงข้อมูลไม่ได้' }); }
 });
-// ==========================================
-// 🔍 API สำหรับ Verification (ค้นหาพนักงานด้วย ID หรือ Username/Employee ID)
-// ==========================================
-fastify.get('/users/verify/:identifier', async (request: any, reply) => {
-  try {
-    const { identifier } = request.params;
 
-    // ค้นหา User โดยเช็คจาก id, username หรือ employee_id
-    const user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { id: identifier },
-          { username: identifier },
-          // ถ้า database ของเฮียมี field employee_id ให้เอาคอมเมนต์บรรทัดล่างออกครับ
-          // { employee_id: identifier } 
-        ]
-      },
-      // เลือกส่งกลับไปเฉพาะข้อมูลที่จำเป็น ป้องกันข้อมูลส่วนตัวหลุด
-      select: {
-        id: true,
-        full_name: true,
-        department: true,
-        role: true,
-        profile_url: true,
-        blood_group: true,
-        medical_cond: true,
-        emergency_contact: true
-      }
-    });
-
-    if (!user) {
-      return reply.status(404).send({ error: 'ไม่พบข้อมูลพนักงาน' });
-    }
-
-    return reply.send(user);
-  } catch (error) {
-    console.error("Verification Error:", error);
-    return reply.status(500).send({ error: 'เซิร์ฟเวอร์ขัดข้อง' });
-  }
-});
 fastify.post('/certificates', async (request: any, reply) => {
   try {
     const { user_id, cert_name, file_url, issued_date, expiry_date, status } = request.body;
