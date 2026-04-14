@@ -36,11 +36,18 @@ fastify.decorate("authenticate", async function (request: any, reply: any) {
 // 📧 ==========================================
 // ✉️ ตั้งค่า Nodemailer & ระบบ OTP
 // ==========================================
+// 📧 ตั้งค่า Nodemailer สำหรับรันบน Cloud (Render/Vercel)
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true, // บังคับใช้ SSL
   auth: {
-    user: process.env.EMAIL_USER, // ใส่อีเมลในไฟล์ .env
-    pass: process.env.EMAIL_PASS  // ใส่รหัสผ่านแอป 16 ตัวในไฟล์ .env
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  },
+  tls: {
+    // ป้องกันปัญหา Certificate บนเซิร์ฟเวอร์ Cloud
+    rejectUnauthorized: false
   }
 });
 
