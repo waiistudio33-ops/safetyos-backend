@@ -36,17 +36,18 @@ fastify.decorate("authenticate", async function (request: any, reply: any) {
 // 📧 ตั้งค่า Nodemailer แบบทะลวง Cloud (Render)
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 587,           // 🟢 ใช้ Port 587 ซึ่งเป็นมิตรกับ Cloud มากกว่า
-  secure: false,       // 🟢 ต้องเป็น false สำหรับ port 587
-  requireTLS: true,    // 🟢 บังคับเข้ารหัสความปลอดภัย
+  port: 465,
+  secure: true, 
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false // 🟢 ป้องกันปัญหา Certificate บนเซิร์ฟเวอร์ Cloud
+    rejectUnauthorized: false
   }
 });
+// 🟢 เพิ่มบรรทัดนี้ลงไปเพื่อบังคับให้วิ่ง IPv4 เท่านั้น
+transporter.set('family', 4);
 
 // เก็บ OTP ใน Memory ชั่วคราว
 const otpStore = new Map<string, { code: string, expiresAt: number }>();
@@ -168,16 +169,18 @@ fastify.post('/register', async (request: any, reply) => {
     const hashedPassword = await bcrypt.hash(password, salt);
 
     // บันทึกลง Database
+    // บันทึกลง Database
     const newUser = await prisma.user.create({
       data: {
         full_name,
         employee_id,
         phone,
         email,
-        username: email, // ใช้อีเมลเป็น Username สำหรับเข้าสู่ระบบ
+        username: email,
         password: hashedPassword,
-        role: 'CONTRACTOR', // ค่าเริ่มต้นให้เป็นผู้รับเหมาก่อน
-        status: 'ACTIVE'
+        role: 'CONTRACTOR',
+        status: 'ACTIVE',
+        department: "ไม่ได้ระบุ" // 🟢 เพิ่มบรรทัดนี้เข้าไปครับ!
       }
     });
 
