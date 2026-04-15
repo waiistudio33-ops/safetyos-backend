@@ -4,7 +4,8 @@ import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client'
 import fastifyJwt from '@fastify/jwt'; 
 import bcrypt from 'bcryptjs';
-import nodemailer from 'nodemailer'; // 🟢 เพิ่ม Import Nodemailer
+// 🟢 เปลี่ยนจาก nodemailer มาใช้ SendGrid
+import sgMail from '@sendgrid/mail';
 
 const globalForPrisma = global as unknown as { prisma: PrismaClient }
 export const prisma = globalForPrisma.prisma || new PrismaClient()
@@ -19,11 +20,11 @@ const LINE_TARGET_ID = process.env.LINE_TARGET_ID || '';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://safetyos-frontend.vercel.app';
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://liff.line.me/2009277207-jNY8QghJ';
 
-// 🔓 🟢 ปลดล็อก CORS: เปิดรับทุก Origin (ตัดปัญหา Vercel ยิงไม่เข้า) แต่ต้องมี Token มาด้วย
+// 🔓 🟢 ปลดล็อก CORS
 fastify.register(cors, { 
-  origin: '*', // ยอมให้ทุกเว็บยิงมาได้
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization'] // อนุญาตให้ส่ง Token ได้
+  allowedHeaders: ['Content-Type', 'Authorization']
 });
 
 fastify.register(fastifyJwt, { secret: JWT_SECRET });
@@ -33,22 +34,14 @@ fastify.decorate("authenticate", async function (request: any, reply: any) {
   catch (err) { reply.status(401).send({ error: 'ไม่ได้รับอนุญาต (Token ไม่ถูกต้องหรือหมดอายุ)' }); }
 });
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false, // ต้อง false สำหรับพอร์ต 587
-  requireTLS: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  // 🟢 จุดสำคัญ: บังคับใช้ IPv4 ตั้งแต่ตอนสร้าง connection
-  socketTimeout: 30000, // เพิ่มเวลาให้รอนิดนึง
-  greetingTimeout: 30000,
-});
-
-// 🟢 ท่าไม้ตาย: บังคับให้ข้าม IPv6 ไปเลย (แก้ปัญหา ENETUNREACH)
-transporter.set('family', 4);
+// 📧 ==========================================
+// ✉️ ตั้งค่า SendGrid API 
+// ==========================================
+if (!process.env.SENDGRID_API_KEY || !process.env.SENDGRID_FROM_EMAIL) {
+  console.warn("⚠️ Warning: SendGrid credentials are not set in .env");
+} else {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+}
 
 // เก็บ OTP ใน Memory ชั่วคราว
 const otpStore = new Map<string, { code: string, expiresAt: number }>();
@@ -97,7 +90,7 @@ fastify.get('/', async (request, reply) => reply.send({ status: 'OK', message: '
 // 👤 API ผู้ใช้งาน, การ Login และ Register
 // ==========================================
 
-// 🚀 API: ขอรหัส OTP ไปที่อีเมล
+// 🚀 API: ขอรหัส OTP ไปที่อีเมล (ยิงผ่าน SendGrid API)
 fastify.post('/auth/request-otp', async (request: any, reply) => {
   const { email } = request.body;
   if (!email) return reply.status(400).send({ error: 'กรุณาระบุอีเมล' });
@@ -110,9 +103,10 @@ fastify.post('/auth/request-otp', async (request: any, reply) => {
   const expiresAt = Date.now() + 5 * 60 * 1000; // 5 นาที
   otpStore.set(email, { code: otpCode, expiresAt });
 
-  const mailOptions = {
-    from: `"SafetyOS System" <${process.env.EMAIL_USER}>`,
+  // 🟢 โครงสร้างอีเมลสำหรับ SendGrid
+  const msg = {
     to: email,
+    from: process.env.SENDGRID_FROM_EMAIL as string, // ต้องเป็นอีเมลที่ Verify แล้ว
     subject: `รหัสยืนยัน SafetyOS: ${otpCode}`,
     html: `
       <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
@@ -127,11 +121,12 @@ fastify.post('/auth/request-otp', async (request: any, reply) => {
   };
 
   try {
-    await transporter.sendMail(mailOptions);
-    console.log(`✅ OTP Sent to ${email}: ${otpCode}`);
+    // 🟢 สั่งยิง API SendGrid
+    await sgMail.send(msg);
+    console.log(`✅ [SendGrid] OTP Sent to ${email}: ${otpCode}`);
     return reply.send({ success: true, message: 'ส่งรหัส OTP เรียบร้อยแล้ว' });
-  } catch (error) {
-    console.error("❌ Email Error:", error);
+  } catch (error: any) {
+    console.error("❌ SendGrid Error:", error.response ? error.response.body : error);
     return reply.status(500).send({ error: 'ระบบไม่สามารถส่งอีเมลได้ กรุณาติดต่อแอดมิน' });
   }
 });
@@ -158,19 +153,14 @@ fastify.post('/register', async (request: any, reply) => {
   const { full_name, employee_id, phone, password, email } = request.body;
   
   try {
-    // ตรวจสอบข้อมูลซ้ำ
     const existingUser = await prisma.user.findFirst({
       where: { OR: [{ email: email }, { username: email }, { employee_id: employee_id }] }
     });
-    
     if (existingUser) return reply.status(400).send({ error: 'อีเมลหรือรหัสพนักงานนี้มีในระบบแล้ว' });
 
-    // เข้ารหัส Password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // บันทึกลง Database
-    // บันทึกลง Database
     const newUser = await prisma.user.create({
       data: {
         full_name,
@@ -181,7 +171,7 @@ fastify.post('/register', async (request: any, reply) => {
         password: hashedPassword,
         role: 'CONTRACTOR',
         status: 'ACTIVE',
-        department: "ไม่ได้ระบุ" // 🟢 เพิ่มบรรทัดนี้เข้าไปครับ!
+        department: "ไม่ได้ระบุ"
       }
     });
 
@@ -208,7 +198,6 @@ fastify.post('/login/line', async (request: any, reply) => {
 fastify.post('/login', async (request: any, reply) => {
   const { username, password, line_id, picture_url } = request.body;
   try {
-    // ยอมให้ล็อกอินด้วย username หรือ email ได้
     let user = await prisma.user.findFirst({ where: { OR: [{ username: username }, { email: username }] } });
     if (!user || !user.password) return reply.status(401).send({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง!' });
 
@@ -248,7 +237,7 @@ fastify.get('/users/me/timeline', { preValidation: [(fastify as any).authenticat
 });
 
 // ==========================================
-// 🔍 API สำหรับ Verification (ค้นหาพนักงานด้วย ID หรือ Username/Employee ID)
+// 🔍 API สำหรับ Verification
 // ==========================================
 fastify.get('/users/verify/:identifier', async (request: any, reply) => {
   try {
