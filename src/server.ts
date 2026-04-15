@@ -33,25 +33,21 @@ fastify.decorate("authenticate", async function (request: any, reply: any) {
   catch (err) { reply.status(401).send({ error: 'ไม่ได้รับอนุญาต (Token ไม่ถูกต้องหรือหมดอายุ)' }); }
 });
 
-// 📧 ตั้งค่า Nodemailer แบบทะลวง Cloud (Render)
-// 📧 ตั้งค่า Nodemailer ใหม่เพื่อทะลวง Port บล็อกของ Render
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 587,           // 🟢 เปลี่ยนจาก 465 เป็น 587 (เป็น Port มาตรฐานที่ Cloud ยอมรับ)
-  secure: false,       // 🟢 ต้องเป็น false สำหรับ Port 587
-  requireTLS: true,    // 🟢 บังคับใช้ TLS เพื่อความปลอดภัย
+  port: 587,
+  secure: false, // ต้อง false สำหรับพอร์ต 587
+  requireTLS: true,
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
+    pass: process.env.EMAIL_PASS,
   },
-  tls: {
-    // ป้องกันปัญหาเรื่อง Certificate บนระบบ Linux ของ Render
-    rejectUnauthorized: false,
-    minVersion: 'TLSv1.2'
-  }
+  // 🟢 จุดสำคัญ: บังคับใช้ IPv4 ตั้งแต่ตอนสร้าง connection
+  socketTimeout: 30000, // เพิ่มเวลาให้รอนิดนึง
+  greetingTimeout: 30000,
 });
 
-// 🟢 ท่าไม้ตายสุดท้าย: บังคับให้วิ่ง IPv4 (IPv6 บน Render มักจะ Time out กับ Google)
+// 🟢 ท่าไม้ตาย: บังคับให้ข้าม IPv6 ไปเลย (แก้ปัญหา ENETUNREACH)
 transporter.set('family', 4);
 
 // เก็บ OTP ใน Memory ชั่วคราว
