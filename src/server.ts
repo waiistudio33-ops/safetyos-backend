@@ -4,7 +4,6 @@ import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client'
 import fastifyJwt from '@fastify/jwt'; 
 import bcrypt from 'bcryptjs';
-// 🟢 เปลี่ยนจาก nodemailer มาใช้ SendGrid
 import sgMail from '@sendgrid/mail';
 
 const globalForPrisma = global as unknown as { prisma: PrismaClient }
@@ -95,18 +94,16 @@ fastify.post('/auth/request-otp', async (request: any, reply) => {
   const { email } = request.body;
   if (!email) return reply.status(400).send({ error: 'กรุณาระบุอีเมล' });
 
-  // เช็คก่อนว่าอีเมลนี้มีคนสมัครไปหรือยัง
   const existingUser = await prisma.user.findFirst({ where: { OR: [{ email: email }, { username: email }] } });
   if (existingUser) return reply.status(400).send({ error: 'อีเมลนี้ถูกใช้งานแล้ว กรุณาเข้าสู่ระบบ' });
 
   const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 นาที
+  const expiresAt = Date.now() + 5 * 60 * 1000;
   otpStore.set(email, { code: otpCode, expiresAt });
 
-  // 🟢 โครงสร้างอีเมลสำหรับ SendGrid
   const msg = {
     to: email,
-    from: process.env.SENDGRID_FROM_EMAIL as string, // ต้องเป็นอีเมลที่ Verify แล้ว
+    from: process.env.SENDGRID_FROM_EMAIL as string,
     subject: `รหัสยืนยัน SafetyOS: ${otpCode}`,
     html: `
       <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
@@ -121,7 +118,6 @@ fastify.post('/auth/request-otp', async (request: any, reply) => {
   };
 
   try {
-    // 🟢 สั่งยิง API SendGrid
     await sgMail.send(msg);
     console.log(`✅ [SendGrid] OTP Sent to ${email}: ${otpCode}`);
     return reply.send({ success: true, message: 'ส่งรหัส OTP เรียบร้อยแล้ว' });
@@ -143,12 +139,11 @@ fastify.post('/auth/verify-otp', async (request: any, reply) => {
   }
   if (record.code !== otp) return reply.status(400).send({ error: 'รหัส OTP ไม่ถูกต้อง' });
 
-  // ลบรหัสออกเพื่อไม่ให้ใช้ซ้ำ
   otpStore.delete(email);
   return reply.send({ success: true, message: 'ยืนยันอีเมลสำเร็จ' });
 });
 
-// 🚀 API: สมัครสมาชิกใหม่ (Register)
+// 🚀 API: สมัครสมาชิกใหม่ (Register ปกติผ่าน Email)
 fastify.post('/register', async (request: any, reply) => {
   const { full_name, employee_id, phone, password, email } = request.body;
   
@@ -178,6 +173,49 @@ fastify.post('/register', async (request: any, reply) => {
     return reply.send({ success: true, message: 'สร้างบัญชีผู้ใช้ใหม่สำเร็จ', user: { id: newUser.id, email: newUser.email } });
   } catch (error) {
     console.error("Register Error:", error);
+    return reply.status(500).send({ error: 'ไม่สามารถสร้างบัญชีได้' });
+  }
+});
+
+// 🚀 API: สมัครสมาชิกด่วนผ่าน LINE (Progressive Profiling)
+fastify.post('/register/line', async (request: any, reply) => {
+  const { line_id, picture_url, full_name, employee_id, department } = request.body;
+  
+  if (!line_id || !full_name) {
+    return reply.status(400).send({ error: 'ข้อมูลไม่ครบถ้วน กรุณากรอกชื่อและทำรายการผ่าน LINE' });
+  }
+
+  try {
+    // 1. เช็คชัวร์ๆ ว่า LINE นี้ไม่เคยสมัครจริงๆ (กันเบิ้ล)
+    const existingLine = await prisma.user.findFirst({ where: { line_id: line_id } });
+    if (existingLine) return reply.status(400).send({ error: 'LINE นี้ถูกใช้งานแล้ว' });
+
+    // 2. เช็คว่ารหัสพนักงานซ้ำไหม (ถ้ามีคนเคยใช้รหัสนี้สมัครผ่านเว็บไปแล้ว)
+    if (employee_id) {
+      const existingEmp = await prisma.user.findFirst({ where: { employee_id: employee_id } });
+      if (existingEmp) return reply.status(400).send({ error: 'รหัสพนักงานนี้มีในระบบแล้ว' });
+    }
+
+    // 3. สร้าง User ใหม่เลย โดยไม่ต้องมี Password
+    const newUser = await prisma.user.create({
+      data: {
+        full_name,
+        employee_id: employee_id || `C-${Math.floor(1000 + Math.random() * 9000)}`, // สุ่มรหัสให้ถ้ารับเหมาไม่กรอก
+        department: department || 'ผู้รับเหมา (Contractor)',
+        line_id: line_id,
+        profile_url: picture_url,
+        role: 'CONTRACTOR',
+        status: 'ACTIVE',
+        username: `line_${line_id.substring(0, 8)}_${Date.now()}` // สร้าง username หลอกๆ ให้ DB ไม่พัง
+      }
+    });
+
+    // 4. สร้าง Token แจกให้เข้าแอปได้เลย
+    const token = fastify.jwt.sign({ id: newUser.id, role: newUser.role, name: newUser.full_name });
+    
+    return reply.send({ success: true, message: 'ลงทะเบียนผ่าน LINE สำเร็จ', user: newUser, token });
+  } catch (error) {
+    console.error("LINE Register Error:", error);
     return reply.status(500).send({ error: 'ไม่สามารถสร้างบัญชีได้' });
   }
 });
