@@ -34,19 +34,24 @@ fastify.decorate("authenticate", async function (request: any, reply: any) {
 });
 
 // 📧 ตั้งค่า Nodemailer แบบทะลวง Cloud (Render)
+// 📧 ตั้งค่า Nodemailer ใหม่เพื่อทะลวง Port บล็อกของ Render
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 465,
-  secure: true, 
+  port: 587,           // 🟢 เปลี่ยนจาก 465 เป็น 587 (เป็น Port มาตรฐานที่ Cloud ยอมรับ)
+  secure: false,       // 🟢 ต้องเป็น false สำหรับ Port 587
+  requireTLS: true,    // 🟢 บังคับใช้ TLS เพื่อความปลอดภัย
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false
+    // ป้องกันปัญหาเรื่อง Certificate บนระบบ Linux ของ Render
+    rejectUnauthorized: false,
+    minVersion: 'TLSv1.2'
   }
 });
-// 🟢 เพิ่มบรรทัดนี้ลงไปเพื่อบังคับให้วิ่ง IPv4 เท่านั้น
+
+// 🟢 ท่าไม้ตายสุดท้าย: บังคับให้วิ่ง IPv4 (IPv6 บน Render มักจะ Time out กับ Google)
 transporter.set('family', 4);
 
 // เก็บ OTP ใน Memory ชั่วคราว
