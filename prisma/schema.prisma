@@ -49,22 +49,33 @@ model User {
 model permits_v2 {
   id                    String    @id @default(uuid())
   permit_number         String    @unique
-  title                 String
+  title                 String    // 🟢 เก็บค่า "ความประสงค์จะขออนุญาตทำงาน"
   description           String?
   permit_type           String
   status                String    @default("PENDING_AREA_OWNER")
   location_detail       String
+  
+  // 🟢 ฟิลด์ใหม่ตามฟอร์ม Step 1
+  area_owner_name       String?   // ชื่อเจ้าของงาน
+  owner_department      String?   // หน่วยงานเจ้าของพื้นที่
+  machinery_tools       String?   // เครื่องจักรหรือเครื่องมือหลักที่ใช้
+  jsa_agreement         Boolean   @default(false) // ยืนยันการแนบ JSA
+
+  // 🗄️ การจัดเก็บและลบเอกสารอัตโนมัติ (Data Archiving)
+  archive_id            String?   @unique   // Tag ID อ้างอิง
+  archive_status        String    @default("NONE") // NONE, PENDING_ARCHIVE, ARCHIVED
+  archive_url           String?             // ลิงก์ Google Drive
+  archived_at           DateTime?           // เวลาที่เก็บ
+
+  // 🕒 ข้อมูลเวลาปฏิบัติงาน
   start_time            DateTime
   end_time              DateTime
+  work_shift            String?   // กะการทำงาน (MORNING / NIGHT)
   created_at            DateTime  @default(now())
   updated_at            DateTime  @updatedAt
 
-  // 👷 ข้อมูลผู้ขออนุญาต และ ผู้รับเหมา
+  // 👷 ข้อมูลผู้ขออนุญาต (ตัดข้อมูลที่ดึงจาก User Profile ออก เพื่อลดความซ้ำซ้อน)
   applicant_id          String?
-  applicant_phone       String?
-  contractor_company    String?
-  contractor_supervisor String?
-  project_manager       String?
   extension_reason      String?
 
   // 📝 Checklists (JSON Fields)
@@ -72,7 +83,9 @@ model permits_v2 {
   tools_equipment       Json?
   safety_measures       Json?
   ppe_required          Json?
-  attached_docs         Json?
+  document_checklist    Json?     
+  other_documents_text  String?   // 🟢 เก็บรายชื่อเอกสารอื่นๆ เป็น String (เช่น "Lifting Plan, Load Chart")
+  attached_docs         Json?     
 
   // 🛑 การปิดงาน (Closing)
   is_closed             Boolean   @default(false)
@@ -93,11 +106,18 @@ model permits_v2 {
   extensions            PermitExtension[]
 }
 
+// 🟢 อัปเกรดตารางรายชื่อผู้ปฏิบัติงานให้ครบเป๊ะตามฟอร์ม
 model PermitWorker {
-  id          String     @id @default(uuid())
-  permit_id   String
-  worker_name String
-  permit      permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
+  id            String     @id @default(uuid())
+  permit_id     String
+  worker_name   String
+  company       String?    // บริษัท
+  card_type     String?    // ประเภทบัตร (CONTRACTOR, VISITOR)
+  card_number   String?    // เลขที่บัตร
+  access_area   String?    // Access Card (Area)
+  access_number String?    // Access Card (Number)
+  
+  permit        permits_v2 @relation(fields: [permit_id], references: [id], onDelete: Cascade)
 }
 
 model PermitDailyInspection {
@@ -261,34 +281,33 @@ model IncidentReport {
   reporter_id String
   title       String
   description String
-  type        IncidentType   // 🟢 เปลี่ยนจาก String ธรรมดาเป็น Enum
+  type        IncidentType   
   lat         Float?
   lng         Float?
   image_url   String?
-  status      IncidentStatus @default(OPEN) // 🟢 เปลี่ยนเป็น Enum
+  status      IncidentStatus @default(OPEN) 
   created_at  DateTime       @default(now())
-  updated_at  DateTime       @updatedAt // 🟢 เพิ่ม Field เอาไว้เช็คว่าปิดเคสตอนไหน
+  updated_at  DateTime       @updatedAt 
   
   // 🔗 ความสัมพันธ์
   reporter    User           @relation(fields: [reporter_id], references: [id])
 }
 
-// 🟢 --- ENUMS for Incident ---
 enum IncidentType {
-  NEAR_MISS          // เกือบเกิดเหตุ
-  FIRST_AID          // บาดเจ็บเล็กน้อย
-  EQUIPMENT_DAMAGE   // อุปกรณ์พัง
-  ENVIRONMENTAL      // สิ่งแวดล้อม
-  SAFETY_HAZARD      // พบจุดเสี่ยง
-  UNSAFE_ACT         // การกระทำเสี่ยง (Legacy)
-  UNSAFE_CONDITION   // สภาพแวดล้อมเสี่ยง (Legacy)
+  NEAR_MISS          
+  FIRST_AID          
+  EQUIPMENT_DAMAGE   
+  ENVIRONMENTAL      
+  SAFETY_HAZARD      
+  UNSAFE_ACT         
+  UNSAFE_CONDITION   
 }
 
 enum IncidentStatus {
-  OPEN               // รอตรวจสอบ
-  IN_PROGRESS        // กำลังแก้ไข
-  RESOLVED           // แก้ไขแล้ว (รอจป.ตรวจ)
-  CLOSED             // ปิดงานสมบูรณ์
+  OPEN               
+  IN_PROGRESS        
+  RESOLVED           
+  CLOSED             
 }
 
 // ==========================================
@@ -311,7 +330,7 @@ model EquipmentInspectionLog {
   inspector_name String?   
   status         String
   details        String
-  photos         Json?     // 🟢 เพิ่มฟิลด์เก็บ URL รูปภาพ (เป็น JSON Array เผื่อเก็บหลายรูปได้)
+  photos         Json?     
   created_at     DateTime  @default(now())
   equipment      Equipment @relation(fields: [equipment_id], references: [id])
   inspector      User      @relation(fields: [inspector_id], references: [id])
@@ -339,7 +358,6 @@ model BbsObservation {
   observer       User          @relation(fields: [observer_id], references: [id])
 }
 
-// --- ENUMS for BBS ---
 enum ObservedGroup {
   EMPLOYEE
   CONTRACTOR

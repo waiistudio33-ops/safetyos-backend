@@ -324,21 +324,150 @@ fastify.get('/permits', { preValidation: [(fastify as any).authenticate] }, asyn
 });
 
 fastify.post('/permits', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
-  const body = request.body as any; const decodedUser = request.user;
+  const body = request.body as any; 
+  const decodedUser = request.user;
+  
   try {
-    const validTypes = ['COLD_WORK', 'HOT_WORK', 'CONFINED_SPACE', 'WORKING_AT_HEIGHT', 'EXCAVATION', 'ELECTRICAL'];
-    const finalType = validTypes.includes(body.permit_type) ? body.permit_type : 'COLD_WORK';
-    const safeTitle = body.title || 'ไม่มีหัวข้อ'; const safeLocation = body.location_detail || 'ไม่ระบุพื้นที่';
-    const permitNo = `${finalType.substring(0, 2).toUpperCase()}-${new Date().getFullYear()}${new Date().getMonth()+1}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const safeStartTime = body.start_time ? new Date(body.start_time) : new Date(); const safeEndTime = body.end_time ? new Date(body.end_time) : new Date(Date.now() + 2 * 60 * 60 * 1000);
+    // 1. ตรวจสอบประเภทงาน
+    const validTypes = ['COLD_WORK', 'HOT_WORK', 'CONFINED_SPACE', 'WORKING_AT_HEIGHT', 'EXCAVATION', 'ELECTRICAL', 'LIFTING', 'HIGH_PRESSURE'];
+    let finalType = 'COLD_WORK';
+    
+    if (body.permit_type) {
+      // ดึงประเภทแรกสุดมาตั้งเป็น Prefix เลขที่เอกสาร (สมมติว่าเลือกหลายข้อ)
+      const firstType = body.permit_type.split(',')[0];
+      finalType = validTypes.includes(firstType) ? firstType : (firstType.startsWith('OTHER') ? 'OTHER' : 'COLD_WORK');
+    }
+    
+    const safeTitle = body.title || 'ไม่มีหัวข้อ'; 
+    const safeLocation = body.location_detail || 'ไม่ระบุพื้นที่';
+    
+    // สร้างเลขที่ Permit อัตโนมัติ (เช่น HO-20264-1234)
+    const permitPrefix = finalType.substring(0, 2).toUpperCase();
+    const permitNo = `${permitPrefix}-${new Date().getFullYear()}${new Date().getMonth()+1}-${Math.floor(1000 + Math.random() * 9000)}`;
+    
+    const safeStartTime = body.start_time ? new Date(body.start_time) : new Date(); 
+    const safeEndTime = body.end_time ? new Date(body.end_time) : new Date(Date.now() + 2 * 60 * 60 * 1000);
 
-    const newPermit = await prisma.permits_v2.create({ data: { permit_number: permitNo, title: safeTitle, description: body.description, permit_type: finalType, status: 'PENDING_AREA_OWNER', location_detail: safeLocation, start_time: safeStartTime, end_time: safeEndTime, applicant_id: decodedUser.id, applicant_phone: body.applicant_phone || null, contractor_company: body.contractor_company || null, contractor_supervisor: body.contractor_supervisor || null, project_manager: body.project_manager || null, work_sub_type: body.work_sub_type || null, tools_equipment: body.tools_equipment || null, safety_measures: body.safety_measures || null, ppe_required: body.ppe_required || null, workers: body.workers && body.workers.length > 0 ? { create: body.workers.map((name: string) => ({ worker_name: name })) } : undefined } });
-    if (['HOT_WORK', 'CONFINED_SPACE', 'WORKING_AT_HEIGHT', 'ELECTRICAL'].includes(finalType)) { await prisma.permit_hazard_details.create({ data: { permit_id: newPermit.id, supervisor_name: body.supervisor_name || null, gas_tester_name: body.gas_tester_name || null, standby_person_name: body.standby_person_name || null, rescuer_name: body.rescuer_name || null, communication_method: body.communication_method || null, height_level: body.height_level ? parseFloat(body.height_level) : null, rescue_plan_url: body.rescue_plan_url || null, is_med_cert_verified: body.is_med_cert_verified || false, is_loto_required: body.is_loto_required || false } }); }
-    if (body.is_loto_required && body.loto_isolation_point) { await prisma.loto_records_v2.create({ data: { permit_id: newPermit.id, isolation_point: body.loto_isolation_point, energy_type: body.loto_energy_type || 'UNKNOWN', lock_number: body.loto_lock_number || '-' } }); }
-    if (body.attachment_url) { await prisma.permitAttachment.create({ data: { permit_id: newPermit.id, file_name: body.attachment_name || 'Document', file_type: 'FILE', storage_path: 'supa', public_url: body.attachment_url } }); }
-    prisma.user.findUnique({ where: { id: decodedUser.id } }).then(async (applicant) => { const areaOwners = await prisma.user.findMany({ where: { role: 'AREA_OWNER', line_id: { not: null } } }); const flex = createPermitFlex("มีคำขอ Permit ใหม่เข้าพื้นที่", newPermit.permit_number, "🔶 รอเจ้าของพื้นที่ตรวจสอบ", safeLocation, applicant?.full_name || '-', "#f59e0b", `${WEB_APP_URL}?page=E_PERMIT`); notifyLineInBackground(areaOwners, flex, LINE_TARGET_ID); }).catch(err => console.log(err));
+    // 🟢 2. ใช้ Prisma Transaction บันทึกข้อมูลรวดเดียว
+    const newPermit = await prisma.$transaction(async (tx) => {
+      
+      // 2.1 สร้างใบ Permit (แม่) ด้วยโครงสร้าง Schema ล่าสุด
+      const createdPermit = await tx.permits_v2.create({ 
+        data: { 
+          permit_number: permitNo, 
+          title: safeTitle, 
+          description: body.description, 
+          permit_type: body.permit_type || 'COLD_WORK', // เก็บ String ยาวๆ ที่มีลูกน้ำคั่นได้เลย
+          status: 'PENDING_AREA_OWNER', 
+          location_detail: safeLocation, 
+          
+          // ข้อมูลใหม่
+          area_owner_name: body.area_owner_name || null,
+          owner_department: body.owner_department || null,
+          machinery_tools: body.machinery_tools || null,
+          jsa_agreement: body.jsa_agreement || false,
+          
+          start_time: safeStartTime, 
+          end_time: safeEndTime, 
+          work_shift: body.work_shift || null,
+          
+          applicant_id: decodedUser.id, 
+          
+          // Checklists
+          document_checklist: body.document_checklist || [],
+          other_documents_text: body.other_documents_text || null,
+
+          // ข้อมูลความปลอดภัย (Step 2)
+          work_sub_type: body.work_sub_type || null, 
+          tools_equipment: body.tools_equipment || null, 
+          safety_measures: body.safety_measures || null, 
+          ppe_required: body.ppe_required || null, 
+        } 
+      });
+
+      // 2.2 สร้างข้อมูลอันตรายเฉพาะหน้างาน
+      if (body.permit_type && (body.permit_type.includes('HOT_WORK') || body.permit_type.includes('CONFINED_SPACE') || body.permit_type.includes('WORKING_AT_HEIGHT') || body.permit_type.includes('ELECTRICAL'))) { 
+        await tx.permit_hazard_details.create({ 
+          data: { 
+            permit_id: createdPermit.id, 
+            supervisor_name: body.supervisor_name || null, 
+            gas_tester_name: body.gas_tester_name || null, 
+            standby_person_name: body.standby_person_name || null, 
+            rescuer_name: body.rescuer_name || null, 
+            communication_method: body.communication_method || null, 
+            height_level: body.height_level ? parseFloat(body.height_level) : null, 
+            rescue_plan_url: body.rescue_plan_url || null, 
+            is_med_cert_verified: body.is_med_cert_verified || false, 
+            is_loto_required: body.is_loto_required || false 
+          } 
+        }); 
+      }
+
+      // 2.3 สร้างข้อมูล LOTO
+      if (body.is_loto_required && body.loto_isolation_point) { 
+        await tx.loto_records_v2.create({ 
+          data: { 
+            permit_id: createdPermit.id, 
+            isolation_point: body.loto_isolation_point, 
+            energy_type: body.loto_energy_type || 'UNKNOWN', 
+            lock_number: body.loto_lock_number || '-' 
+          } 
+        }); 
+      }
+
+      // 2.4 บันทึกไฟล์แนบ JSA
+      if (body.attachment_url) { 
+        await tx.permitAttachment.create({ 
+          data: { 
+            permit_id: createdPermit.id, 
+            file_name: body.attachment_name || 'Document', 
+            file_type: 'FILE', 
+            storage_path: 'supa', 
+            public_url: body.attachment_url 
+          } 
+        }); 
+      }
+
+      // 🟢 2.5 บันทึกรายชื่อคนงานแบบละเอียด (Loop Insert)
+      if (body.workers && Array.isArray(body.workers) && body.workers.length > 0) {
+        // ใช้ createMany เพื่อความเร็วในการยิง DB
+        await tx.permitWorker.createMany({
+          data: body.workers.map((w: any) => ({
+            permit_id: createdPermit.id,
+            worker_name: w.worker_name,
+            company: w.company || null,
+            card_type: w.card_type || null,
+            card_number: w.card_number || null,
+            access_area: w.access_area || null,
+            access_number: w.access_number || null
+          }))
+        });
+      }
+
+      return createdPermit;
+    }); // 🛑 จบ Prisma Transaction
+
+    // 3. การแจ้งเตือนผ่าน LINE
+    prisma.user.findUnique({ where: { id: decodedUser.id } }).then(async (applicant) => { 
+      const areaOwners = await prisma.user.findMany({ where: { role: 'AREA_OWNER', line_id: { not: null } } }); 
+      const flex = createPermitFlex(
+        "มีคำขอ Permit ใหม่เข้าพื้นที่", 
+        newPermit.permit_number, 
+        "🔶 รอเจ้าของพื้นที่ตรวจสอบ", 
+        safeLocation, 
+        applicant?.full_name || '-', 
+        "#f59e0b", 
+        `${WEB_APP_URL}?page=E_PERMIT`
+      ); 
+      notifyLineInBackground(areaOwners, flex, LINE_TARGET_ID); 
+    }).catch(err => console.log(err));
+
     return reply.send(newPermit);
-  } catch (error: any) { return reply.status(500).send({ error: `เซิร์ฟเวอร์ขัดข้อง` }); }
+    
+  } catch (error: any) { 
+    console.error("🔥 Error during Permit Creation:", error);
+    return reply.status(500).send({ error: `เซิร์ฟเวอร์ขัดข้อง ไม่สามารถบันทึกข้อมูลได้` }); 
+  }
 });
 
 fastify.put('/permits/:id', { preValidation: [(fastify as any).authenticate] }, async (request: any, reply) => {
